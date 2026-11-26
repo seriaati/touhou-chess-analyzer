@@ -1,0 +1,1208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Touhou Chess Analyzer</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1e1d1b; --muted: #6b6862; --border: #dedbd4;
+    --light: #eedfc4; --dark: #b58a63; --accent: #c0392b; --accent-text: #fff; --good: #2e7d4f; --hl: #f4d03f;
+    --threat: #e0584a; --shadow: rgba(0,0,0,.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #171614; --panel: #22211e; --text: #ece9e3; --muted: #a29e96; --border: #3a3833;
+      --light: #cdb894; --dark: #8f6a4a; --accent: #e0584a; --good: #5cc488; --hl: #f4d03f; --shadow: rgba(0,0,0,.5); }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 19px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(300px, 520px) minmax(300px, 1fr) minmax(300px, 1fr); gap: 20px; padding: 20px; max-width: 1800px; }
+  @media (max-width: 1280px) { main { grid-template-columns: minmax(300px, 520px) minmax(300px, 1fr); } }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 16px; } }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
+  h2 { font-size: 14px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; }
+
+  .board { display: grid; grid-template-columns: repeat(8, 1fr); border: 2px solid var(--dark); border-radius: 4px; overflow: hidden; user-select: none; }
+  .sq { position: relative; aspect-ratio: 1; min-width: 0; display: flex; align-items: center; justify-content: center; font-size: min(7.5vw, 46px); line-height: 1; touch-action: none; }
+  .sq.has-piece { cursor: grab; }
+  .sq.l { background: var(--light); } .sq.d { background: var(--dark); }
+  .sq.target { box-shadow: inset 0 0 0 4px var(--hl); }
+  .sq.threat { box-shadow: inset 0 0 0 4px var(--threat); }
+  .sq.drop { box-shadow: inset 0 0 0 4px var(--accent); }
+  .sq.pick { cursor: pointer; background-image: linear-gradient(rgba(46,125,79,.3), rgba(46,125,79,.3)); box-shadow: inset 0 0 0 3px var(--good); }
+  .sq.picked { background-image: linear-gradient(rgba(46,125,79,.6), rgba(46,125,79,.6)); box-shadow: inset 0 0 0 3px var(--good); }
+  .sq.lifted .glyph { opacity: .25; }
+  .pc-w { color: #fff; text-shadow: 0 0 2px #000, 0 0 1px #000; }
+  .pc-b { color: #111; text-shadow: 0 0 2px rgba(255,255,255,.5); }
+  .sq .coord { position: absolute; left: 2px; bottom: 1px; font-size: 10px; color: rgba(0,0,0,.45); pointer-events: none; }
+  .fx-row { position: absolute; top: 1px; right: 1px; display: flex; flex-wrap: wrap-reverse; gap: 1px; justify-content: flex-end; max-width: 100%; }
+  .fx { position: relative; width: clamp(14px, 3.4vw, 22px); aspect-ratio: 1; padding: 0; border: 0; background: none; cursor: pointer; }
+  .fx img { width: 100%; height: 100%; display: block; filter: drop-shadow(0 0 1px rgba(0,0,0,.6)); }
+  .fx b { position: absolute; right: -2px; bottom: -3px; font-size: 9px; line-height: 1; padding: 1px 2px; border-radius: 3px; background: rgba(0,0,0,.75); color: #fff; }
+  .fx.mine img { filter: drop-shadow(0 0 2px #2e7d4f) drop-shadow(0 0 1px #2e7d4f); }
+  .fx.theirs img { filter: drop-shadow(0 0 2px #c0392b) drop-shadow(0 0 1px #c0392b); }
+  .barrier-fill { position: absolute; inset: 3px; border: 3px dashed; border-radius: 4px; pointer-events: none; }
+  .barrier-fill.mine { border-color: rgba(46,125,79,.85); }
+  .barrier-fill.theirs { border-color: rgba(192,57,43,.85); }
+
+  .tray { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+  .tray-row { display: flex; gap: 4px; }
+  .tray-pc { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-size: 30px; line-height: 1; border: 1px solid var(--border); background: var(--bg); border-radius: 6px; cursor: grab; touch-action: none; user-select: none; }
+  .tray-fx { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 3px 8px 3px 4px; font-size: 13px; cursor: grab; touch-action: none; user-select: none; }
+  .tray-fx img { width: 22px; height: 22px; }
+  .tray-fx.mine img { filter: drop-shadow(0 0 2px #2e7d4f); }
+  .tray-fx.theirs img { filter: drop-shadow(0 0 2px #c0392b); }
+  .ghost { position: fixed; left: 0; top: 0; z-index: 100; pointer-events: none; line-height: 1; }
+  .ghost img { width: 34px; height: 34px; display: block; filter: drop-shadow(0 2px 4px var(--shadow)); }
+  .ghost b { position: absolute; right: -4px; bottom: -4px; font: 700 12px system-ui, sans-serif; padding: 1px 3px; border-radius: 3px; background: rgba(0,0,0,.75); color: #fff; }
+  .ghost b:empty { display: none; }
+  body.dragging, body.dragging * { cursor: grabbing !important; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+  .row > .grow { flex: 1; min-width: 200px; }
+  label { font-size: 13px; color: var(--muted); }
+  .field { display: inline-flex; align-items: center; gap: 6px; }
+  .field img { width: 18px; height: 18px; }
+  input[type=number] { width: 64px; } input[type=text] { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
+  input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font: inherit; }
+  button.primary { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 8px; padding: 10px 18px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  button.primary:disabled { opacity: .6; cursor: progress; }
+  button.small:disabled { opacity: .5; cursor: default; }
+  button.small { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 13px; }
+
+  .dd { position: relative; min-width: 150px; }
+  .dd-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 4px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 8px; cursor: pointer; text-align: left; font: inherit; font-size: 14px; }
+  .dd-btn:disabled { opacity: .55; cursor: not-allowed; }
+  .dd-btn:focus-visible, .dd-search:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .dd-btn[aria-expanded=true] { border-color: var(--accent); }
+  .dd-label { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; }
+  .dd-ph { color: var(--muted); }
+  .chev { flex: none; width: 12px; height: 12px; color: var(--muted); transition: transform .15s; }
+  .dd-btn[aria-expanded=true] .chev { transform: rotate(180deg); }
+  .dd-pop { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; min-width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 32px var(--shadow); overflow: hidden; }
+  .dd.wide .dd-pop { width: min(440px, calc(100vw - 32px)); }
+  .dd-search { display: block; width: 100%; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 12px; background: var(--panel); }
+  .dd-list { max-height: 360px; overflow-y: auto; padding: 4px; }
+  .dd-group { display: flex; align-items: center; gap: 8px; padding: 10px 8px 4px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .dd-group { cursor: pointer; border-radius: 6px; }
+  .dd-group.active { background: var(--bg); }
+  .dd-all { display: none; margin-left: auto; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--accent); }
+  .dd-group.active .dd-all { display: inline; }
+  .dd-opt { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+  .dd-opt.active { background: var(--bg); }
+  .dd-opt[aria-selected=true] { font-weight: 600; }
+  .dd-empty { padding: 14px 12px; color: var(--muted); font-size: 13px; }
+  .dd-card { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .dd-name { display: flex; align-items: center; gap: 4px; }
+  .dd-desc { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .av { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; flex: none; background: var(--bg); border: 1px solid var(--border); }
+  .av.sm { width: 20px; height: 20px; }
+  .av.lg { width: 40px; height: 40px; }
+  .ico { width: 16px; height: 16px; flex: none; vertical-align: -3px; }
+  .cost { display: inline-flex; align-items: center; gap: 2px; font-weight: 700; font-size: 13px; background: var(--bg); border-radius: 5px; padding: 1px 6px 1px 3px; font-variant-numeric: tabular-nums; flex: none; }
+
+  .hand { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; }
+  .card .info { flex: 1; min-width: 0; } .card .name { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; } .card .desc { font-size: 12px; color: var(--muted); }
+  .ult { color: var(--accent); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; gap: 2px; }
+  .x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; padding: 0 2px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; min-width: 180px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 999px; padding: 4px; font-size: 14px; }
+  .chip .av.sm { width: 30px; height: 30px; }
+  .chip .name { flex: 1; }
+  .chip button { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+  .chip button:disabled { opacity: .5; cursor: default; }
+
+  .verdict { font-size: 17px; font-weight: 600; padding: 12px; border-radius: 8px; background: var(--bg); border-left: 4px solid var(--good); }
+  .verdict small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .verdict .warn { color: var(--threat); }
+  .inline-card { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  tr.opt:hover { background: var(--bg); }
+  tr.best td:first-child { border-left: 3px solid var(--good); }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .line { font-family: ui-monospace, monospace; font-size: 12px; }
+  .mv { font: inherit; color: inherit; background: none; border: 0; border-radius: 4px; padding: 0 2px; cursor: pointer; }
+  .mv:hover { background: var(--hl); color: #1e1d1b; }
+  .mv.played { background: var(--good); color: #fff; }
+  .cast { display: inline-flex; align-items: center; gap: 4px; font-family: system-ui, sans-serif; border: 1px solid var(--threat); color: var(--threat); border-radius: 999px; padding: 0 7px 0 1px; margin: 1px 0; white-space: nowrap; }
+  .err { color: var(--accent); font-weight: 600; }
+  .note { font-size: 12px; color: var(--muted); }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--hl); color: #1e1d1b; }
+  .card .actions { display: flex; align-items: center; gap: 4px; }
+  .card .cancel-btn, .card.casting .cast-btn, .card:not(.casting) .cast-prompt { display: none; }
+  .card.casting .cancel-btn { display: inline-block; }
+  .card.casting { border-color: var(--good); }
+  .cast-prompt { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--good); }
+  .copy-btn { display: inline-flex; align-items: center; gap: 4px; }
+  .cast-note { color: var(--accent); }
+
+  footer { max-width: 1800px; padding: 4px 20px 28px; color: var(--muted); font-size: 13px; }
+  footer h2 { margin-bottom: 6px; }
+  footer p { margin: 0 0 6px; max-width: 80ch; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Touhou Chess Analyzer</h1>
+  <p>Set up the position, effects and both hands, then analyze. Uses the game's own rules and engine.</p>
+</header>
+<main>
+  <div>
+    <section>
+      <div class="board" id="board"></div>
+      <div class="tray" id="pieces"></div>
+      <div class="tray" id="effects"></div>
+      <div class="row">
+        <button class="small" id="back" title="Back one move">◀ Back</button>
+        <button class="small" id="fwd" title="Forward one move">Forward ▶</button>
+        <button class="small" id="flip">Flip board</button>
+        <button class="small" id="start">Start position</button>
+        <button class="small" id="clear">Clear board</button>
+      </div>
+    </section>
+    <section>
+      <h2>Position</h2>
+      <div class="row">
+        <span class="field"><label>You play</label><span id="side"></span></span>
+      </div>
+      <div class="row">
+        <span id="turnInfo"></span>
+        <button class="small" id="switchTurn" title="Give the move to the other side">Switch turn</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="cK" checked> White O-O</label>
+        <label><input type="checkbox" id="cQ" checked> White O-O-O</label>
+        <label><input type="checkbox" id="ck" checked> Black O-O</label>
+        <label><input type="checkbox" id="cq" checked> Black O-O-O</label>
+      </div>
+      <div class="row">
+        <input type="text" id="fen" spellcheck="false">
+        <button class="small" id="loadFen">Load FEN</button>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Your cards</h2>
+      <div class="row" style="margin-top:0">
+        <label class="field"><img src="game/icons/spirit.png" alt="">Spirit power <input type="number" id="mana" min="0" max="50" value="0"></label>
+        <span class="field"><label>Think time</label><span id="think"></span></span>
+      </div>
+      <div class="row"><div class="grow" id="addCard"></div></div>
+      <div class="hand" id="hand"></div>
+    </section>
+    <section>
+      <h2>Opponent</h2>
+      <div class="row" style="margin-top:0">
+        <label class="field"><img src="game/icons/spirit.png" alt="">Spirit power <input type="number" id="oppMana" min="0" max="50" value="0"></label>
+      </div>
+      <h3>Cards in their hand</h3>
+      <div class="row" style="margin-top:0"><div class="grow" id="addOppHand"></div></div>
+      <div class="hand" id="oppHand"></div>
+      <h3>Cards they have played (for Kourindou Appraisal)</h3>
+      <div class="row" style="margin-top:0"><div class="grow" id="addOpp"></div></div>
+      <div class="chips" id="oppPlayed"></div>
+    </section>
+  </div>
+
+  <div>
+    <div class="row" style="margin:0 0 16px">
+      <button class="primary" id="analyze">Analyze</button>
+      <label><input type="checkbox" id="auto" checked> Analyze automatically when your turn starts</label>
+    </div>
+    <section id="results" hidden>
+      <h2>Result</h2>
+      <div id="resultBody"></div>
+    </section>
+  </div>
+</main>
+<footer>
+  <h2>Credits</h2>
+  <p><a href="https://store.steampowered.com/app/5482350/">Touhou Chess</a> is developed by Grandmaster Cirno and published by 月影工房 and <a href="https://fiveduckgames.com/">FIVE DUCK GAMES</a>. This analyzer runs the game's own engine and uses its card text and artwork. Please <a href="https://store.steampowered.com/app/5482350/">get the game on Steam</a>.</p>
+  <p>Touhou Chess is an unofficial fan work based on Touhou Project by Team Shanghai Alice. This analyzer is an unofficial fan-made tool and is not made or endorsed by the game's developer or publishers.</p>
+  <p>Moves are calculated in your browser; nothing about your games is sent anywhere.</p>
+</footer>
+
+<script>
+const GLYPH = { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙', k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+// icon = cell name in the game's keyword icon atlas (exported to game/icons).
+const EFFECTS = [
+  { id: 'freeze',  label: 'Freeze',  icon: 'freeze',  debuff: true },
+  { id: 'disarm',  label: 'Disarm',  icon: 'disarm',  debuff: true },
+  { id: 'ice',     label: 'Ice',     icon: 'slip',    debuff: true },
+  { id: 'fate',    label: 'Fate',    icon: 'doom',    debuff: true },
+  { id: 'protect', label: 'Protect', icon: 'ward' },
+  { id: 'counter', label: 'Counter', icon: 'counter' },
+  { id: 'clone',   label: 'Clone',   icon: 'phantom' },
+  { id: 'leap',    label: 'Leap',    icon: 'leap' },
+  { id: 'pierce',  label: 'Pierce',  icon: 'pierce' },
+  { id: 'barrier-mine',   label: 'Barrier (yours)',  icon: 'barrier', barrier: 'mine' },
+  { id: 'barrier-theirs', label: 'Barrier (theirs)', icon: 'barrier', barrier: 'theirs' },
+];
+const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+const HAND_CAP = 5;
+// SpellCatalog.PieceValue and SpellState.ManaCap in the game's engine.
+const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+const SPIRIT_CAP = 50;
+const MAX_EFFECT_TURNS = 9;  // the analyzer clamps effect turns to 1-9
+// SpellState.BeginTurn: a side draws when its turn starts on a move number past 15 * (draws so far + 1).
+const DRAW_EVERY = 15;
+const STORAGE_KEY = 'touhou-chess-analyzer';
+
+let board = {};          // "e4" -> "P"
+let effects = [];        // { sq, kind, turns } or { sq, barrier: 'mine' | 'theirs', turns }
+let side = 'w';          // the colour you play
+let turn = 'w';          // the colour to move
+let ep = '-';            // en passant square, as in a FEN
+let moveNo = 1;          // FEN fullmove number; card draws happen on multiples of DRAW_EVERY
+let analyzing = false;
+let flipped = false;
+let cards = [];
+let hand = [];
+let oppHand = [];
+let oppPlayed = [];
+
+// The game's engine, compiled to WebAssembly, runs in workers so searches don't freeze the page.
+// Casting gets its own worker so picking targets stays responsive while an analysis runs.
+function engineWorker() {
+  const worker = new Worker('worker.js', { type: 'module' });
+  const pending = new Map();
+  let nextId = 0;
+  worker.onmessage = ({ data }) => {
+    const { resolve, reject } = pending.get(data.id);
+    pending.delete(data.id);
+    if (data.error) reject(new Error(data.error)); else resolve(data.response);
+  };
+  return (method, request) => new Promise((resolve, reject) => {
+    pending.set(nextId, { resolve, reject });
+    worker.postMessage({ id: nextId++, method, request });
+  });
+}
+const analyzeEngine = engineWorker();
+const castEngine = engineWorker();
+let highlighted = [];
+let threatened = [];
+let analyzed = null;     // { at, snap }: the history entry the last analysis ran on; clicked lines replay from here
+let history = [];        // snapshots after each move; history[at] is the one on the board
+let at = 0;
+let casting = null;      // a cast waiting on the user: { color, id, copy, targets, next?, stepKind?, step?, steps?, copies? }
+let castNote = null;     // { color, text }: why the last cast didn't go as asked, shown under that hand
+let held = null;        // { payload, ghost, stop }: an effect picked up from the tray, placed by the next board click
+
+const $ = id => document.getElementById(id);
+const sqName = (f, r) => 'abcdefgh'[f] + (r + 1);
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const avatar = (owner, cls = '') => `<img class="av ${cls}" src="game/avatars/${owner}.png" alt="" onerror="this.style.visibility='hidden'">`;
+const icon = (name, cls = '') => `<img class="ico ${cls}" src="game/icons/${name}.png" alt="">`;
+const effectDef = e => EFFECTS.find(x => e.barrier ? x.barrier === e.barrier : x.id === e.kind);
+
+
+const dropdowns = [];
+document.addEventListener('pointerdown', e => dropdowns.forEach(d => { if (!d.root.contains(e.target)) d.close(); }));
+
+// items: { value, html, search?, group?, groupHtml?, disabled? }. With keepValue the button shows the chosen
+// item; without it the dropdown works as a picker that always shows its placeholder.
+function makeDropdown(host, { placeholder = '', search = false, wide = false, keepValue = false, onSelect }) {
+  const root = document.createElement('div');
+  root.className = 'dd' + (wide ? ' wide' : '');
+  root.innerHTML = `<button type="button" class="dd-btn" aria-haspopup="listbox" aria-expanded="false">
+      <span class="dd-label"></span>
+      <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+    </button>
+    <div class="dd-pop" hidden>
+      ${search ? '<input class="dd-search" type="search" placeholder="Search…" autocomplete="off" spellcheck="false">' : ''}
+      <div class="dd-list" role="listbox"></div>
+    </div>`;
+  host.append(root);
+  const btn = root.querySelector('.dd-btn');
+  const pop = root.querySelector('.dd-pop');
+  const list = root.querySelector('.dd-list');
+  const input = root.querySelector('.dd-search');
+  let items = [], value = null, visible = [], active = -1;
+
+  function renderLabel() {
+    const it = keepValue && items.find(i => i.value === value);
+    root.querySelector('.dd-label').innerHTML = it ? it.html : `<span class="dd-ph">${esc(placeholder)}</span>`;
+  }
+  function renderList() {
+    const q = input ? input.value.trim().toLowerCase() : '';
+    visible = [];
+    let group;
+    for (const it of items.filter(i => !q || (i.search || '').toLowerCase().includes(q))) {
+      if (it.group !== undefined && it.group !== group) { group = it.group; visible.push({ header: true, group, html: it.groupHtml }); }
+      visible.push(it);
+    }
+    list.innerHTML = visible.map((it, i) => it.header
+      ? `<div class="dd-group${i === active ? ' active' : ''}" role="option" data-i="${i}">${it.html}<span class="dd-all">Add all</span></div>`
+      : `<div class="dd-opt${i === active ? ' active' : ''}" role="option" data-i="${i}" aria-selected="${keepValue && it.value === value}">${it.html}</div>`
+    ).join('') || '<div class="dd-empty">No matches</div>';
+  }
+  const firstOption = () => Math.max(0, visible.findIndex(i => !i.header));
+  function markActive() {
+    list.querySelectorAll('[data-i]').forEach(o => o.classList.toggle('active', +o.dataset.i === active));
+    list.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
+  }
+  function open() {
+    if (btn.disabled) return;
+    dropdowns.forEach(d => d !== api && d.close());
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    if (input) input.value = '';
+    active = -1;
+    renderList();
+    const chosen = visible.findIndex(i => !i.header && i.value === value);
+    active = chosen >= 0 ? chosen : firstOption();
+    markActive();
+    (input || btn).focus();
+  }
+  function close(refocus) {
+    if (pop.hidden) return;
+    pop.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    if (refocus) btn.focus();
+  }
+  function choose(i) {
+    const it = visible[i];
+    if (!it) return;
+    // A group header picks every item in the group, including ones the search hides.
+    const values = it.header ? items.filter(x => x.group === it.group).map(x => x.value) : [it.value];
+    if (keepValue) value = it.value;
+    // Pickers stay open with the search focused so several cards can be added in a row.
+    if (keepValue || !input) close(true);
+    renderLabel();
+    values.forEach(onSelect);
+    if (!pop.hidden) {
+      active = Math.min(i, visible.length - 1);
+      markActive();
+      input.focus();
+      input.select();
+    }
+  }
+
+  btn.onclick = () => pop.hidden ? open() : close();
+  list.onclick = e => { const o = e.target.closest('[data-i]'); if (o) choose(+o.dataset.i); };
+  list.onmousemove = e => { const o = e.target.closest('[data-i]'); if (o && +o.dataset.i !== active) { active = +o.dataset.i; markActive(); } };
+  input?.addEventListener('input', () => { renderList(); active = firstOption(); markActive(); });
+  root.addEventListener('keydown', e => {
+    if (pop.hidden) {
+      if (e.target === btn && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); open(); }
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (visible.length) { active = (active + (e.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length; markActive(); }
+    } else if (e.key === 'Enter') { e.preventDefault(); choose(active); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(true); }
+    else if (e.key === 'Tab') close();
+  });
+
+  const api = {
+    root, close,
+    set(newItems, opts = {}) {
+      items = newItems;
+      if ('value' in opts) value = opts.value;
+      if ('placeholder' in opts) placeholder = opts.placeholder;
+      btn.disabled = !!opts.disabled;
+      if (btn.disabled) close();
+      renderLabel();
+      if (!pop.hidden) renderList();
+    },
+  };
+  dropdowns.push(api);
+  return api;
+}
+
+
+function placementToBoard(placement) {
+  const b = {};
+  placement.split('/').forEach((row, i) => {
+    let f = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) f += +ch;
+      else { b[sqName(f, 7 - i)] = ch; f++; }
+    }
+  });
+  return b;
+}
+
+function fen() {
+  let rows = [];
+  for (let r = 7; r >= 0; r--) {
+    let row = '', empty = 0;
+    for (let f = 0; f < 8; f++) {
+      const p = board[sqName(f, r)];
+      if (p) { if (empty) row += empty; empty = 0; row += p; } else empty++;
+    }
+    rows.push(row + (empty || ''));
+  }
+  let castle = ['K', 'Q', 'k', 'q'].filter(c => $('c' + c).checked).join('') || '-';
+  return `${rows.join('/')} ${turn} ${castle} ${ep} 0 ${moveNo}`;
+}
+
+function pieceHtml(p) {
+  return `<span class="glyph ${p === p.toUpperCase() ? 'pc-w' : 'pc-b'}">${GLYPH[p]}&#xFE0E;</span>`;
+}
+
+function renderBoard() {
+  const el = $('board');
+  el.innerHTML = '';
+  for (let i = 0; i < 64; i++) {
+    const r = flipped ? Math.floor(i / 8) : 7 - Math.floor(i / 8);
+    const f = flipped ? 7 - (i % 8) : i % 8;
+    const name = sqName(f, r);
+    const d = document.createElement('div');
+    d.className = 'sq ' + ((f + r) % 2 ? 'l' : 'd')
+      + (threatened.includes(name) ? ' threat' : highlighted.includes(name) ? ' target' : '')
+      + (casting?.next?.includes(name) ? ' pick' : '') + (casting?.targets.includes(name) ? ' picked' : '');
+    d.dataset.sq = name;
+    const p = board[name];
+    if (p) { d.innerHTML = pieceHtml(p); d.classList.add('has-piece'); }
+    if (f === (flipped ? 7 : 0) || r === (flipped ? 7 : 0)) d.insertAdjacentHTML('beforeend', `<span class="coord">${name}</span>`);
+    const here = effects.filter(e => e.sq === name);
+    const barrier = here.find(e => e.barrier);
+    if (barrier) d.insertAdjacentHTML('beforeend', `<div class="barrier-fill ${barrier.barrier}"></div>`);
+    const icons = here.map(e => {
+      const def = effectDef(e);
+      return `<button class="fx ${e.barrier || ''}" data-fx="${effects.indexOf(e)}" title="${def.label} · ${e.turns} turn${e.turns > 1 ? 's' : ''} left (click to take one off)">
+        <img src="game/icons/${def.icon}.png" alt="${def.label}"><b>${e.turns}</b></button>`;
+    }).join('');
+    if (icons) d.insertAdjacentHTML('beforeend', `<div class="fx-row">${icons}</div>`);
+    el.appendChild(d);
+  }
+  $('fen').value = fen();
+  $('back').disabled = at === 0;
+  $('fwd').disabled = at >= history.length - 1;
+  renderStatus();
+}
+
+function renderStatus() {
+  const name = c => c === 'w' ? 'White' : 'Black';
+  const draw = moveNo % DRAW_EVERY === 0
+    ? `<span class="badge">${name(turn)} draws a card this turn (if under ${HAND_CAP})</span>`
+    : `<span class="note">next card draw on move ${DRAW_EVERY * (Math.floor(moveNo / DRAW_EVERY) + 1)}</span>`;
+  $('turnInfo').innerHTML = `<b>${name(turn)}</b> to move · move ${moveNo} ${draw}`;
+  const btn = $('analyze');
+  btn.disabled = analyzing;
+  btn.textContent = analyzing ? 'Analyzing…' : 'Analyze';
+  save();
+}
+
+function save() {
+  try {
+    history[at] = snapshot();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ history, at, side, flipped, thinkMs, auto: $('auto').checked }));
+  } catch {}
+}
+
+const colorOf = p => p === p.toUpperCase() ? 'w' : 'b';
+const other = c => c === 'w' ? 'b' : 'w';
+
+function addSpirit(color, n) {
+  const el = $(color === side ? 'mana' : 'oppMana');
+  el.value = Math.max(0, Math.min(SPIRIT_CAP, +el.value + n));
+}
+
+function snapshot() {
+  return { board: { ...board }, effects: effects.map(e => ({ ...e })), mana: +$('mana').value, oppMana: +$('oppMana').value,
+    castling: ['K', 'Q', 'k', 'q'].filter(c => $('c' + c).checked).join(''), turn, ep, moveNo,
+    hand: [...hand], oppHand: [...oppHand], oppPlayed: [...oppPlayed] };
+}
+
+function restore(snap) {
+  board = { ...snap.board };
+  effects = snap.effects.map(e => ({ ...e }));
+  $('mana').value = snap.mana;
+  $('oppMana').value = snap.oppMana;
+  ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = snap.castling.includes(c));
+  ({ turn, ep, moveNo } = snap);
+  hand = [...snap.hand]; oppHand = [...snap.oppHand]; oppPlayed = [...snap.oppPlayed];
+}
+
+function pushHistory() {
+  history.splice(at + 1);
+  history.push(snapshot());
+  at = history.length - 1;
+}
+
+function resetHistory() {
+  history = [snapshot()];
+  at = 0;
+}
+
+// Saves first so setup edits made since the last move survive stepping away and back.
+function step(delta) {
+  history[at] = snapshot();
+  at += delta;
+  restore(history[at]);
+  $('resultBody').querySelectorAll('.mv.played').forEach(x => x.classList.remove('played'));
+  renderBoard();
+  renderCards();
+}
+
+$('board').addEventListener('pointerdown', e => {
+  const sq = e.target.closest('.sq');
+  if (e.button !== 0 || e.target.closest('.fx') || !sq || !board[sq.dataset.sq]) return;
+  const from = sq.dataset.sq;
+  sq.classList.add('lifted');
+  startDrag(e, { piece: board[from], from }, pieceHtml(board[from]), getComputedStyle(sq).fontSize);
+});
+$('board').addEventListener('click', e => {
+  const fx = e.target.closest('.fx');
+  if (!fx) return;
+  const effect = effects[+fx.dataset.fx];
+  if (--effect.turns <= 0) effects.splice(+fx.dataset.fx, 1);
+  renderBoard();
+});
+
+
+// payload: { piece, from? } for pieces (from = board square), { effect } for effects.
+function canDrop(payload, sq) {
+  if (!sq) return false;
+  if (payload.piece) return true;
+  const def = EFFECTS.find(x => x.id === payload.effect);
+  return def.barrier ? !board[sq] : !!board[sq];
+}
+
+// Castling rights lost when a piece moves from, or is captured on, each square.
+const CASTLING_SQUARES = { e1: 'KQ', h1: 'K', a1: 'Q', e8: 'kq', h8: 'k', a8: 'q' };
+
+function castle(piece, from, to) {
+  const home = colorOf(piece) === 'w' ? 'e1' : 'e8';
+  if (piece.toLowerCase() === 'k' && from === home && (to === 'g' + home[1] || to === 'c' + home[1])) {
+    const [rookFrom, rookTo] = to[0] === 'g' ? ['h' + to[1], 'f' + to[1]] : ['a' + to[1], 'd' + to[1]];
+    const rook = colorOf(piece) === 'w' ? 'R' : 'r';
+    if (board[rookFrom] === rook && !board[rookTo]) {
+      delete board[rookFrom];
+      board[rookTo] = rook;
+      effects = effects.map(e => e.sq === rookFrom ? { ...e, sq: rookTo } : e);
+    }
+  }
+  for (const c of (CASTLING_SQUARES[from] || '') + (CASTLING_SQUARES[to] || '')) $('c' + c).checked = false;
+}
+
+function drop(payload, sq) {
+  if (payload.piece) {
+    if (payload.from === sq || (!payload.from && !sq)) return;
+    let piece = payload.piece;
+    const target = sq && board[sq];
+    const isMove = payload.from && sq && (!target || colorOf(target) !== colorOf(piece));
+    if (isMove) {
+      history[at] = snapshot();
+      const mover = colorOf(piece), victim = other(mover);
+      const pawn = piece.toLowerCase() === 'p';
+      const passedSq = pawn && !target && sq === ep && sq[0] !== payload.from[0] ? sq[0] + payload.from[1] : null;
+      const takenSq = target ? sq : passedSq;
+      // The game refunds a lost piece's value to its owner (never for a Clone), then the other side's turn begins with +1.
+      if (takenSq && board[takenSq] && !effects.some(e => e.sq === takenSq && e.kind === 'clone')) {
+        addSpirit(victim, PIECE_VALUE[board[takenSq].toLowerCase()]);
+      }
+      addSpirit(victim, 1);
+      if (passedSq) { delete board[passedSq]; effects = effects.filter(e => e.sq !== passedSq); }
+      ep = pawn && Math.abs(sq[1] - payload.from[1]) === 2 ? sq[0] + (+sq[1] + +payload.from[1]) / 2 : '-';
+      if (pawn && (sq[1] === '8' || sq[1] === '1')) piece = mover === 'w' ? 'Q' : 'q';
+      turn = victim;
+      if (mover === 'b') moveNo++;
+    }
+    if (payload.from) {
+      // A moved piece takes its effects along; one dropped off the board loses them.
+      delete board[payload.from];
+      effects = sq
+        ? effects.filter(e => e.sq !== sq).map(e => e.sq === payload.from ? { ...e, sq } : e)
+        : effects.filter(e => e.sq !== payload.from);
+    } else {
+      effects = effects.filter(e => !(e.sq === sq && e.barrier));
+    }
+    if (sq) board[sq] = piece;
+    if (isMove) {
+      castle(piece, payload.from, sq);
+      tickEffects(colorOf(piece));
+      pushHistory();
+      if (turn === side && $('auto').checked) analyze();
+    }
+    return;
+  }
+  if (!canDrop(payload, sq)) return;
+  const def = EFFECTS.find(x => x.id === payload.effect);
+  // Dropping an effect that is already there adds a turn to it.
+  const same = effects.find(e => e.sq === sq && (def.barrier ? e.barrier === def.barrier : e.kind === def.id));
+  if (same) same.turns = Math.min(MAX_EFFECT_TURNS, same.turns + payload.turns);
+  else if (def.barrier) {
+    effects = effects.filter(e => !(e.sq === sq && e.barrier));
+    effects.push({ sq, barrier: def.barrier, turns: payload.turns });
+  } else effects.push({ sq, kind: def.id, turns: payload.turns });
+}
+
+// Debuffs are cast by the piece's enemy; everything else by its own side.
+function ownerColor(e) {
+  if (e.barrier) return e.barrier === 'mine' ? side : other(side);
+  const pieceColor = colorOf(board[e.sq]);
+  return EFFECTS.find(x => x.id === e.kind).debuff ? other(pieceColor) : pieceColor;
+}
+
+// The game ticks an effect once per ply and shows ceil(plies / 2) turns left, so the count drops each time
+// the side that didn't cast it moves (see BuildState in Analyzer.cs).
+function tickEffects(mover) {
+  effects = effects.map(e => ownerColor(e) === mover ? e : { ...e, turns: e.turns - 1 });
+  // A piece goes when its Clone or Fate runs out (SpellState.Tick). The owner is refunded for a Fate,
+  // but never for a clone, as with a captured clone.
+  const removed = [...new Set(effects.filter(e => (e.kind === 'clone' || e.kind === 'fate') && e.turns <= 0).map(e => e.sq))];
+  removed.forEach(sq => {
+    if (!effects.some(e => e.sq === sq && e.kind === 'clone')) addSpirit(colorOf(board[sq]), PIECE_VALUE[board[sq].toLowerCase()]);
+    delete board[sq];
+  });
+  effects = effects.filter(e => e.turns > 0 && !removed.includes(e.sq));
+}
+
+function squareAt(x, y) {
+  const el = document.elementFromPoint(x, y)?.closest('.sq');
+  return el && $('board').contains(el) ? el : null;
+}
+
+function startDrag(e, payload, ghostHtml, fontSize) {
+  e.preventDefault();
+  dropdowns.forEach(d => d.close());
+  const ghost = document.createElement('div');
+  ghost.className = 'ghost';
+  ghost.innerHTML = ghostHtml;
+  if (fontSize) ghost.style.fontSize = fontSize;
+  document.body.append(ghost);
+  document.body.classList.add('dragging');
+  let over = null;
+  const move = ev => {
+    ghost.style.transform = `translate(${ev.clientX - ghost.offsetWidth / 2}px, ${ev.clientY - ghost.offsetHeight / 2}px)`;
+    const sq = squareAt(ev.clientX, ev.clientY);
+    const next = sq && canDrop(payload, sq.dataset.sq) ? sq : null;
+    if (next !== over) { over?.classList.remove('drop'); next?.classList.add('drop'); over = next; }
+  };
+  const stop = () => {
+    window.removeEventListener('pointermove', move);
+    ghost.remove();
+    document.body.classList.remove('dragging');
+  };
+  const end = ev => {
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    // Pressing and releasing an effect without dragging picks it up instead; it follows the cursor until a click.
+    const clicked = ev.type === 'pointerup' && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 5;
+    if (payload.effect && clicked) {
+      held = { payload, ghost, stop };
+      ghost.querySelector('b').textContent = payload.turns;
+      return;
+    }
+    stop();
+    if (ev.type === 'pointerup') drop(payload, squareAt(ev.clientX, ev.clientY)?.dataset.sq || null);
+    renderBoard();
+  };
+  move(e);
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', end);
+  window.addEventListener('pointercancel', end);
+}
+
+function grabEffect(e, id) {
+  const def = EFFECTS.find(x => x.id === id);
+  startDrag(e, { effect: def.id, turns: 1 }, `<img src="game/icons/${def.icon}.png" alt=""><b></b>`);
+}
+
+// Places the held effect on sq, or puts it back when sq is null.
+function releaseHeld(sq) {
+  const { payload, stop } = held;
+  held = null;
+  stop();
+  if (sq) drop(payload, sq);
+  renderBoard();
+}
+
+// The click event still fires after a pointerdown the held effect consumed; this swallows it.
+let swallowClick = false;
+window.addEventListener('pointerdown', e => {
+  swallowClick = false;
+  if (held) heldPress(e);
+  else if (casting) castPress(e);
+}, true);
+window.addEventListener('click', e => { if (swallowClick) { swallowClick = false; e.stopPropagation(); e.preventDefault(); } }, true);
+window.addEventListener('contextmenu', e => { if (swallowClick) e.preventDefault(); }, true);
+window.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (held) releaseHeld(null);
+  else cancelCast();
+});
+
+// While an effect is held, presses go to it alone: nothing else on the page reacts.
+function heldPress(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  swallowClick = true;
+  const trayFx = e.button === 0 && e.target.closest('.tray-fx');
+  if (trayFx && trayFx.dataset.effect === held.payload.effect) {
+    held.payload.turns = Math.min(MAX_EFFECT_TURNS, held.payload.turns + 1);
+    held.ghost.querySelector('b').textContent = held.payload.turns;
+    return;
+  }
+  const sq = e.button === 0 && squareAt(e.clientX, e.clientY)?.dataset.sq;
+  // A misclick on a square the effect can't go on keeps it held.
+  if (sq && !canDrop(held.payload, sq)) return;
+  releaseHeld(sq || null);
+  if (trayFx) { swallowClick = false; grabEffect(e, trayFx.dataset.effect); }
+}
+
+// While a cast waits for a target, picking a highlighted square continues it and any other action drops it.
+function castPress(e) {
+  if (e.target.closest('.copy-btn, .cancel-btn')) return;
+  const sq = e.button === 0 && e.target.closest('#board .sq')?.dataset.sq;
+  if (sq && casting.next?.includes(sq)) {
+    e.preventDefault();
+    e.stopPropagation();
+    swallowClick = true;
+    casting.targets.push(sq);
+    casting.next = null;
+    castStep();
+    return;
+  }
+  // Pressing an empty square does nothing on its own, so it isn't an action that drops the cast;
+  // neither is a double-click on a target already picked.
+  if (sq && (!board[sq] || casting.targets.includes(sq))) return;
+  cancelCast();
+}
+
+function renderTrays() {
+  const tray = set => set.split('').map(p =>
+    `<div class="tray-pc" data-piece="${p}" title="Drag onto the board">${pieceHtml(p)}</div>`).join('');
+  $('pieces').innerHTML = `<div class="tray-row">${tray('KQRBNP')}</div><div class="tray-row">${tray('kqrbnp')}</div>`;
+  $('effects').innerHTML = EFFECTS.map(e =>
+    `<div class="tray-fx ${e.barrier || ''}" data-effect="${e.id}" title="Drag onto the board, or click to pick up (click again for more turns) and click a square to place"><img src="game/icons/${e.icon}.png" alt="">${e.label}</div>`).join('');
+  $('pieces').onpointerdown = e => {
+    const t = e.target.closest('.tray-pc');
+    if (t && e.button === 0) startDrag(e, { piece: t.dataset.piece }, pieceHtml(t.dataset.piece), getComputedStyle($('board').firstChild).fontSize);
+  };
+  $('effects').onpointerdown = e => {
+    const t = e.target.closest('.tray-fx');
+    if (t && e.button === 0) grabEffect(e, t.dataset.effect);
+  };
+}
+
+
+function cardById(id) { return cards.find(c => c.id === id); }
+
+function richDesc(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML.replace(/&lt;(\/?)b&gt;/g, '<$1b>');
+}
+
+function plainDesc(text) { return text.replace(/<\/?b>/g, '').replace(/\s+/g, ' '); }
+
+function ownerLabel(o) { return o === 'shop' ? 'Kourindou (shop)' : o[0].toUpperCase() + o.slice(1); }
+
+function cardItems(exclude) {
+  return cards.filter(c => !exclude.includes(c.id)).map(c => ({
+    value: c.id,
+    group: c.owner,
+    groupHtml: `${avatar(c.owner, 'sm')}${esc(ownerLabel(c.owner))}`,
+    search: `${c.name} ${ownerLabel(c.owner)} ${plainDesc(c.desc)}`,
+    html: `<span class="dd-card"><span class="dd-name">${esc(c.name)}${c.ultimate ? icon('ultimate') : ''}</span>
+      <span class="dd-desc">${esc(plainDesc(c.desc))}</span></span><span class="cost">${icon('spirit')}${c.cost}</span>`,
+  }));
+}
+
+function cardHtml(id, color) {
+  const c = cardById(id);
+  const active = casting?.color === color && casting.id === id;
+  return `<div class="card${active ? ' casting' : ''}">${avatar(c.owner, 'lg')}<div class="info">
+    <div class="name">${esc(c.name)}${c.ultimate ? `<span class="ult">${icon('ultimate')}ULTIMATE</span>` : ''}</div>
+    <div class="desc">${richDesc(c.desc)}</div>${active ? castPromptHtml() : ''}</div>
+    <span class="actions"><span class="cost">${icon('spirit')}${c.cost}</span>
+    <button class="small cast-btn" data-id="${id}" title="Play this card: pick its targets on the board, then it takes effect and pays its spirit power">Cast</button>
+    <button class="small cancel-btn" title="Stop casting: the card stays in the hand">Cancel</button>
+    <button class="x" data-id="${id}" title="Remove without casting" aria-label="Remove ${esc(c.name)}">×</button></span></div>`;
+}
+
+function stepText(kind, color) {
+  const mine = color === side;
+  return {
+    OwnPiece: mine ? 'one of your pieces' : 'one of their pieces',
+    EnemyPiece: mine ? 'an enemy piece' : 'one of your pieces',
+    EmptySquare: 'an empty square',
+    AnySquare: 'a square',
+  }[kind] || 'a target';
+}
+
+function castPromptHtml() {
+  if (casting.copies) {
+    return `<div class="cast-prompt">Copy which card? ${casting.copies.map(id =>
+      `<button class="small copy-btn" data-copy="${id}">${avatar(cardById(id).owner, 'sm')}${esc(cardById(id).name)}</button>`).join('')}</div>`;
+  }
+  if (!casting.next) return '';
+  const count = casting.steps > 1 ? ` (${casting.step + 1} of ${casting.steps})` : '';
+  return `<div class="cast-prompt">Pick ${stepText(casting.stepKind, casting.color)} on the board${count}</div>`;
+}
+
+const pickers = {};
+
+function renderCardList(listEl, ids, empty, color) {
+  listEl.innerHTML = (ids.map(id => cardHtml(id, color)).join('') || `<p class="note">${empty}</p>`)
+    + (castNote?.color === color ? `<p class="note cast-note">${esc(castNote.text)}</p>` : '');
+  listEl.querySelectorAll('.x').forEach(b => b.onclick = () => { takeFromHand(color, b.dataset.id); renderCards(); });
+  listEl.querySelectorAll('.cast-btn').forEach(b => b.onclick = () => startCast(color, b.dataset.id));
+  listEl.querySelectorAll('.cancel-btn').forEach(b => b.onclick = cancelCast);
+  listEl.querySelectorAll('.copy-btn').forEach(b => b.onclick = () => { casting.copy = b.dataset.copy; casting.copies = null; castStep(); });
+}
+
+function takeFromHand(color, id) {
+  if (color === side) hand = hand.filter(h => h !== id);
+  else oppHand = oppHand.filter(h => h !== id);
+}
+
+function startCast(color, id) {
+  castNote = null;
+  casting = { color, id, copy: null, targets: [] };
+  castStep();
+}
+
+// Asks the game's engine what the cast needs next, or resolves it once every target is picked.
+async function castStep() {
+  const c = casting;
+  renderBoard();
+  renderCards();
+  const mine = c.color === side;
+  const [placement, , castle, passant, half, move] = fen().split(' ');
+  let d;
+  try {
+    d = await castEngine('Cast', {
+      // The engine only lets the side to move cast, so the caster is put on move for the request.
+      fen: `${placement} ${c.color} ${castle} ${c.color === turn ? passant : '-'} ${half} ${move}`,
+      mana: +$(mine ? 'mana' : 'oppMana').value, opponentMana: +$(mine ? 'oppMana' : 'mana').value,
+      opponentPlayed: mine ? oppPlayed : [], effects: effectPayload(),
+      cardId: c.id, copy: c.copy, targets: c.targets,
+    });
+  } catch (e) {
+    d = { error: `The analyzer failed: ${e.message}` };
+  }
+  if (casting !== c) return;
+  if (d.error && !c.targets.length && !c.copy) {
+    // The card has no effect this board can show, or the engine can't follow it (Rewind needs the last move):
+    // it's still cast, as it was in the real game, and the board is left for the user to fix.
+    casting = null;
+    takeFromHand(c.color, c.id);
+    castCard(c.color, c.id);
+    castNote = { color: c.color, text: `${cardById(c.id).name} was cast, but the board was left as it was. ${d.error}` };
+  } else if (d.error) {
+    casting = null;
+    castNote = { color: c.color, text: `${cardById(c.id).name} wasn't cast: ${d.error}` };
+  } else if (d.copies) {
+    c.copies = d.copies;
+  } else if (d.next) {
+    Object.assign(c, { next: d.next, stepKind: d.stepKind, step: d.step, steps: d.steps });
+  } else {
+    casting = null;
+    finishCast(c, d);
+  }
+  renderBoard();
+  renderCards();
+}
+
+function finishCast(c, d) {
+  const keep = { turn, ep };
+  applyFen(d.fen);
+  turn = keep.turn;
+  if (c.color !== turn) ep = keep.ep;
+  effects = d.effects.map(effectFromServer);
+  $('mana').value = side === 'w' ? d.whiteMana : d.blackMana;
+  $('oppMana').value = side === 'w' ? d.blackMana : d.whiteMana;
+  takeFromHand(c.color, c.id);
+  if (c.color !== side && !oppPlayed.includes(c.id)) oppPlayed.push(c.id);
+}
+
+// Only classes change, so the press that dropped the cast still reaches the button it was on.
+function cancelCast() {
+  if (!casting) return;
+  casting = null;
+  document.querySelectorAll('.card.casting').forEach(el => el.classList.remove('casting'));
+  document.querySelectorAll('.sq.pick, .sq.picked').forEach(el => el.classList.remove('pick', 'picked'));
+}
+
+// Paying for and logging a cast card; the caller takes it out of the hand.
+function castCard(color, id) {
+  addSpirit(color, -cardById(id).cost);
+  if (color !== side && !oppPlayed.includes(id)) oppPlayed.push(id);
+}
+
+function renderCards() {
+  renderCardList($('hand'), hand, 'No cards in hand yet.', side);
+  renderCardList($('oppHand'), oppHand, 'Add the cards you know they hold. The engine checks their best card reply to each line.', other(side));
+  pickers.hand.set(cardItems(hand), {
+    placeholder: hand.length >= HAND_CAP ? `Hand is full (${HAND_CAP} cards)` : '+ Add a card to your hand',
+    disabled: hand.length >= HAND_CAP,
+  });
+  pickers.oppHand.set(cardItems(oppHand), {
+    placeholder: oppHand.length >= HAND_CAP ? `Hand is full (${HAND_CAP} cards)` : '+ Add a card they hold',
+    disabled: oppHand.length >= HAND_CAP,
+  });
+  pickers.oppPlayed.set(cardItems(oppPlayed));
+  const handFull = oppHand.length >= HAND_CAP;
+  $('oppPlayed').innerHTML = oppPlayed.map(id => `<div class="chip">${avatar(cardById(id).owner, 'sm')}<span class="name">${esc(cardById(id).name)}</span>
+    <button data-id="${id}" data-to-hand ${handFull ? 'disabled' : ''} title="${handFull ? `Their hand is full (${HAND_CAP} cards)` : 'They drew it back: move it to their hand'}">↩ Hand</button>
+    <button data-id="${id}" title="Remove">×</button></div>`).join('');
+  $('oppPlayed').querySelectorAll('button').forEach(b => b.onclick = () => {
+    oppPlayed = oppPlayed.filter(h => h !== b.dataset.id);
+    if ('toHand' in b.dataset) oppHand.push(b.dataset.id);
+    renderCards();
+  });
+  save();
+}
+
+
+function effectPayload() {
+  return effects.map(e => ({ kind: e.barrier ? 'barrier' : e.kind, square: e.sq, turns: e.turns,
+    owner: ownerColor(e) === 'w' ? 'white' : 'black' }));
+}
+
+function cardName(cardId, copy) {
+  const name = esc(cardById(cardId).name);
+  return copy ? `${name} → copies ${esc(cardById(copy).name)}` : name;
+}
+
+function cardTitle(cardId, copy) {
+  return `<span class="inline-card">${avatar(cardById(cardId).owner, 'sm')}${cardName(cardId, copy)}</span>`;
+}
+
+function replyHtml(reply) {
+  const target = reply.targetText ? ` on ${esc(reply.targetText)}` : '';
+  return `<span class="cast">${avatar(cardById(reply.cardId).owner, 'sm')}${cardName(reply.cardId, reply.copy)}${target}</span>`;
+}
+
+function moveHtml(row, ply, san) {
+  return `<button class="mv" data-row="${row}" data-ply="${ply}" title="Play the line up to here on the board">${esc(san)}</button>`;
+}
+
+function lineHtml(opt, row) {
+  return opt.line.map((p, i) => p.san === '(skip)' ? '<em>(opponent skips)</em>' : p.san === '(cast)' ? replyHtml(opt.reply) : moveHtml(row, i, p.san)).join(' ');
+}
+
+function applyFen(text) {
+  const [placement, toMove, castling, passant, , move] = text.trim().split(/\s+/);
+  board = placementToBoard(placement || '');
+  effects = effects.filter(e => e.barrier ? !board[e.sq] : board[e.sq]);
+  if (castling) ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = castling.includes(c));
+  if (toMove) turn = toMove === 'b' ? 'b' : 'w';
+  ep = passant || '-';
+  moveNo = +move || 1;
+}
+
+function effectFromServer(e) {
+  const owner = e.owner === 'black' ? 'b' : 'w';
+  return e.kind === 'barrier' ? { sq: e.square, barrier: owner === side ? 'mine' : 'theirs', turns: e.turns }
+    : { sq: e.square, kind: e.kind, turns: e.turns };
+}
+
+function lostValue(before, after, color) {
+  const count = b => Object.values(b).filter(p => colorOf(p) === color)
+    .reduce((n, p) => (n[p.toLowerCase()] = (n[p.toLowerCase()] || 0) + 1, n), {});
+  const was = count(before), now = count(after);
+  return Object.keys(was).reduce((sum, t) => sum + Math.max(0, was[t] - (now[t] || 0)) * PIECE_VALUE[t], 0);
+}
+
+// Replays the option's line from the analyzed position, one history entry per ply. Effects follow the pieces that
+// move, a cast card's effects come from the server, and the ply's FEN fixes up everything else a card or capture changed.
+function playLine(opt, upto) {
+  history.splice(analyzed.at);
+  history.push(analyzed.snap);
+  at = history.length - 1;
+  restore(analyzed.snap);
+  if (opt.cardId) {
+    hand = hand.filter(h => h !== opt.cardId);
+    castCard(side, opt.cardId);
+  }
+  opt.line.slice(0, upto + 1).forEach((ply, i) => {
+    const [placement, toMove] = ply.fen.split(' ');
+    if (ply.san === '(cast)') {
+      oppHand = oppHand.filter(h => h !== opt.reply.cardId);
+      castCard(other(side), opt.reply.cardId);
+    }
+    if (ply.effects) effects = ply.effects.map(effectFromServer);
+    if (ply.from) {
+      // The FEN says who moves next, which is safer than the piece on ply.from: a card cast before it may have moved things.
+      const victim = toMove;
+      const after = placementToBoard(placement);
+      if (!effects.some(e => e.sq === ply.to && e.kind === 'clone')) addSpirit(victim, lostValue(board, after, victim));
+      // Card effects can also remove the mover's own pieces (a Slash trap, Fate); those are refunded too.
+      // A promoting pawn only looks lost.
+      addSpirit(other(victim), lostValue(board, after, other(victim)) - (ply.san.includes('=') ? PIECE_VALUE.p : 0));
+      // A skipped turn (The World) never begins, so it brings no spirit power.
+      if (opt.line[i + 1]?.san !== '(skip)') addSpirit(victim, 1);
+      effects = effects.filter(e => e.sq !== ply.to).map(e => e.sq === ply.from ? { ...e, sq: ply.to } : e);
+    }
+    applyFen(ply.fen);
+    if (ply.from) tickEffects(other(toMove));
+    if (ply.san !== '(skip)') pushHistory();
+  });
+  highlighted = []; threatened = [];
+  renderBoard();
+  renderCards();
+  const last = opt.line[upto];
+  animateMove(last.from, last.to);
+  if (/^O-O/.test(last.san)) {
+    const rank = last.to[1];
+    animateMove(...(last.to[0] === 'g' ? ['h' + rank, 'f' + rank] : ['a' + rank, 'd' + rank]));
+  }
+}
+
+// Slides the piece now on `to` over from `from`. It's lifted above the other squares only while moving,
+// so it never covers the clickable effect icons.
+function animateMove(from, to) {
+  const square = name => $('board').querySelector(`.sq[data-sq="${name}"]`);
+  const glyph = square(to)?.querySelector('.glyph');
+  if (!glyph) return;
+  const a = square(from).getBoundingClientRect(), b = square(to).getBoundingClientRect();
+  glyph.style.position = 'relative';
+  glyph.style.zIndex = 2;
+  glyph.animate([{ transform: `translate(${a.left - b.left}px, ${a.top - b.top}px)` }, { transform: 'none' }],
+    { duration: 250, easing: 'ease-out' }).onfinish = () => glyph.style.position = glyph.style.zIndex = '';
+}
+
+function renderResult(d) {
+  $('results').hidden = false;
+  if (d.error) { $('resultBody').innerHTML = `<p class="err">${esc(d.error)}</p>`; return; }
+  const rec = d.cards.find(o => o.cardId === d.recommended);
+  const chosen = rec || d.noCard;
+  const firstPly = chosen.line.findIndex(p => p.from);
+  const firstMove = firstPly >= 0 ? moveHtml(rec ? d.cards.indexOf(rec) + 1 : 0, firstPly, chosen.line[firstPly].san) : null;
+  let verdict;
+  if (rec) {
+    const target = rec.targets.length ? ` on ${esc(rec.targetText || '—')}` : '';
+    verdict = `Cast ${cardTitle(rec.cardId, rec.copy)}${target}, then play ${firstMove || '—'}`
+      + `<small>Evaluation ${rec.scoreText} (${rec.gain >= 0 ? '+' : ''}${(rec.gain / 100).toFixed(2)} vs. not casting) · costs ${rec.cost} spirit power</small>`;
+  } else {
+    verdict = `Play ${firstMove || '(no legal move)'}`
+      + `<small>Evaluation ${d.noCard.scoreText}. No card in hand is worth its spirit power here${d.cards.length ? '' : ' (none are playable)'}.</small>`;
+  }
+  if (chosen.reply) {
+    verdict += `<small class="warn">Their best move ${replyHtml(chosen.reply)}</small>`;
+  }
+  const rows = [{ ...d.noCard, none: true }, ...d.cards];
+  $('resultBody').innerHTML = `<div class="verdict">${verdict}</div>
+    <div class="table-wrap"><table><thead><tr><th>Play</th><th>Targets</th><th class="num">Cost</th><th class="num">Eval</th><th class="num">vs. no card</th><th>Line</th></tr></thead>
+    <tbody>${rows.map((o, i) => `<tr class="opt${(o.none ? !rec : o.cardId === d.recommended && o.copy === rec?.copy) ? ' best' : ''}" data-i="${i}">
+      <td>${o.none ? '<em>No card</em>' : cardTitle(o.cardId, o.copy)}</td>
+      <td>${o.none ? '' : esc(o.targetText || '—')}</td>
+      <td class="num">${o.none ? '' : o.cost}</td>
+      <td class="num">${o.scoreText}</td>
+      <td class="num">${o.none ? '' : (o.gain >= 0 ? '+' : '') + (o.gain / 100).toFixed(2)}</td>
+      <td class="line">${lineHtml(o, i)}</td></tr>`).join('')}</tbody></table></div>`;
+  $('resultBody').querySelectorAll('tr.opt').forEach(tr => {
+    tr.onmouseenter = () => {
+      const o = rows[+tr.dataset.i];
+      highlighted = o.affected || [];
+      threatened = o.reply?.affected || [];
+      renderBoard();
+    };
+    tr.onmouseleave = () => { highlighted = []; threatened = []; renderBoard(); };
+  });
+  $('resultBody').querySelectorAll('.mv').forEach(b => b.onclick = () => {
+    $('resultBody').querySelectorAll('.mv.played').forEach(x => x.classList.remove('played'));
+    b.classList.add('played');
+    playLine(rows[+b.dataset.row], +b.dataset.ply);
+  });
+}
+
+async function analyze() {
+  if (analyzing) return;
+  // Asking for an analysis means it is your move, whatever the site's turn tracking says. The engine
+  // analyzes for the side to move, using your hand and spirit power.
+  if (turn !== side) { turn = side; ep = '-'; renderBoard(); }
+  analyzing = true;
+  renderStatus();
+  history[at] = snapshot();
+  analyzed = { at, snap: history[at] };
+  try {
+    renderResult(await analyzeEngine('Analyze', {
+      fen: fen(), mana: +$('mana').value, opponentMana: +$('oppMana').value,
+      hand, opponentHand: oppHand, opponentPlayed: oppPlayed, effects: effectPayload(), thinkMs: +thinkMs,
+    }));
+  } catch (e) {
+    renderResult({ error: `The analyzer failed: ${e.message}` });
+  } finally {
+    analyzing = false;
+    renderStatus();
+  }
+}
+
+
+const sideItems = [
+  { value: 'w', html: `${pieceHtml('K')} White` },
+  { value: 'b', html: `${pieceHtml('k')} Black` },
+];
+const sidePicker = makeDropdown($('side'), { keepValue: true, onSelect: v => { side = v; renderBoard(); } });
+sidePicker.set(sideItems, { value: side });
+
+let thinkMs = '5000';
+const thinkItems = ['2000', '5000', '10000', '20000'].map(v => ({ value: v, html: `${v / 1000} s` }));
+const thinkPicker = makeDropdown($('think'), { keepValue: true, onSelect: v => { thinkMs = v; save(); } });
+thinkPicker.set(thinkItems, { value: thinkMs });
+
+pickers.hand = makeDropdown($('addCard'), { search: true, wide: true,
+  onSelect: id => { if (hand.length < HAND_CAP) hand.push(id); renderCards(); } });
+pickers.oppHand = makeDropdown($('addOppHand'), { search: true, wide: true,
+  onSelect: id => { if (oppHand.length < HAND_CAP) oppHand.push(id); renderCards(); } });
+pickers.oppPlayed = makeDropdown($('addOpp'), { search: true, wide: true, placeholder: '+ Add a card they played',
+  onSelect: id => { oppPlayed.push(id); renderCards(); } });
+
+$('flip').onclick = () => { flipped = !flipped; renderBoard(); };
+$('back').onclick = () => step(-1);
+$('fwd').onclick = () => step(1);
+$('start').onclick = () => {
+  board = placementToBoard(START); effects = [];
+  $('mana').value = 0; $('oppMana').value = 0;
+  ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = true);
+  turn = 'w'; ep = '-'; moveNo = 1;
+  hand = []; oppHand = []; oppPlayed = [];
+  resetHistory(); renderBoard(); renderCards();
+};
+$('clear').onclick = () => { board = {}; effects = []; resetHistory(); renderBoard(); };
+$('loadFen').onclick = () => {
+  applyFen($('fen').value);
+  side = turn;
+  sidePicker.set(sideItems, { value: side });
+  resetHistory();
+  renderBoard();
+};
+['cK', 'cQ', 'ck', 'cq'].forEach(id => $(id).onchange = renderBoard);
+$('analyze').onclick = analyze;
+$('switchTurn').onclick = () => { turn = other(turn); renderBoard(); };
+$('auto').onchange = save;
+['mana', 'oppMana'].forEach(id => $(id).oninput = save);
+
+board = placementToBoard(START);
+resetHistory();
+try {
+  const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+  if (saved?.history?.length) {
+    ({ history, at, side, flipped, thinkMs } = saved);
+    $('auto').checked = saved.auto;
+    restore(history[at]);
+    sidePicker.set(sideItems, { value: side });
+    thinkPicker.set(thinkItems, { value: thinkMs });
+  }
+} catch {}
+renderTrays();
+renderBoard();
+fetch('game/cards.json').then(r => r.json()).then(list => {
+  cards = list;
+  // Saved hands may name cards a game update removed.
+  [hand, oppHand, oppPlayed] = [hand, oppHand, oppPlayed].map(ids => ids.filter(cardById));
+  renderCards();
+});
+</script>
+</body>
+</html>

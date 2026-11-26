@@ -1,28 +1,43 @@
-if (args.FirstOrDefault() == "decks")
-{
-    DeckLab.Run(args);
-    return;
-}
-
-var builder = WebApplication.CreateBuilder(args);
-builder.WebHost.UseUrls("http://localhost:5000");
-var app = builder.Build();
-
 string gameData = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
     ".local/share/Steam/steamapps/common/Touhou Chess/TOUHOU CHESS_Data");
-var cards = CardText.Load(Path.Combine(gameData, "resources.assets"));
-var images = GameImages.Load(gameData);
 
-app.UseDefaultFiles();
-app.UseStaticFiles();
-app.MapGet("/api/cards", () => cards);
-app.MapGet("/api/avatar/{owner}.png", (string owner) => Image(images.Avatars, owner));
-app.MapGet("/api/icon/{name}.png", (string name) => Image(images.Icons, name));
-app.MapPost("/api/analyze", (AnalyzeRequest req, CancellationToken ct) => Task.Run(() => Analyzer.Run(req, ct), ct));
-app.MapPost("/api/cast", (CastRequest req) => Analyzer.Cast(req));
+switch (args.FirstOrDefault())
+{
+    case "decks":
+        DeckLab.Run(args);
+        break;
+    case "export":
+        Export();
+        break;
+    default:
+        Console.WriteLine("usage: export | decks ...");
+        Console.WriteLine("  export  copy the game's engine DLL, card text and images into lib/ and web/wwwroot/game/");
+        break;
+}
 
-app.Run();
+// The website can't read a Steam install, so it ships these copies instead.
+void Export()
+{
+    File.Copy(Path.Combine(gameData, "Managed/TouhouChess.Core.dll"), "lib/TouhouChess.Core.dll", overwrite: true);
 
-static IResult Image(Dictionary<string, byte[]> set, string key) =>
-    set.TryGetValue(key, out var png) ? Results.File(png, "image/png") : Results.NotFound();
+    string outDir = "web/wwwroot/game";
+    var cards = CardText.Load(Path.Combine(gameData, "resources.assets"));
+    Directory.CreateDirectory(outDir);
+    File.WriteAllText(Path.Combine(outDir, "cards.json"),
+        System.Text.Json.JsonSerializer.Serialize(cards, System.Text.Json.JsonSerializerOptions.Web));
+
+    var images = GameImages.Load(gameData);
+    WriteImages(Path.Combine(outDir, "avatars"), images.Avatars);
+    WriteImages(Path.Combine(outDir, "icons"), images.Icons);
+    Console.WriteLine($"Exported {cards.Count} cards, {images.Avatars.Count} avatars and {images.Icons.Count} icons.");
+}
+
+static void WriteImages(string dir, Dictionary<string, byte[]> set)
+{
+    Directory.CreateDirectory(dir);
+    foreach (var (name, png) in set)
+    {
+        File.WriteAllBytes(Path.Combine(dir, name + ".png"), png);
+    }
+}
