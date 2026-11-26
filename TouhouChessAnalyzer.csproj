@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GameData>$(HOME)/.local/share/Steam/steamapps/common/Touhou Chess/TOUHOU CHESS_Data</GameData>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="TouhouChess.Core">
+      <HintPath>$(GameData)/Managed/TouhouChess.Core.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>
