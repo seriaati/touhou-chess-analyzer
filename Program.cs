@@ -1,3 +1,9 @@
+if (args.FirstOrDefault() == "decks")
+{
+    DeckLab.Run(args);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls("http://localhost:5000");
 var app = builder.Build();
