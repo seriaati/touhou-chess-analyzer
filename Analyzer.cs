@@ -10,13 +10,28 @@ public sealed record AnalyzeRequest(
 
 public sealed record OpponentReply(string CardId, string Copy, string TargetText, List<string> Affected);
 
-// Line holds SAN moves plus two markers: "(skip)" for a skipped opponent turn and "(cast)" where Reply is played.
+// San is a SAN move or one of two markers: "(skip)" for a skipped opponent turn and "(cast)" where Reply is played.
+// From/To are null for markers; Fen is the position after the ply, so it includes any card's changes to the board.
+// Effects is set on the ply right after a card is cast: every effect on the board once the card resolved.
+public sealed record Ply(string San, string From, string To, string Fen, List<EffectInput> Effects = null);
+
 public sealed record PlayOption(
     string CardId, string Copy, List<string> Targets, string TargetText, List<string> Affected, int Cost,
-    int Score, string ScoreText, int Gain, int Value, List<string> Line, OpponentReply Reply);
+    int Score, string ScoreText, int Gain, int Value, List<Ply> Line, OpponentReply Reply);
 
 public sealed record AnalyzeResponse(
     string Error, string SideToMove, PlayOption NoCard, List<PlayOption> Cards, string Recommended);
+
+// The card is cast by the side to move in Fen. Targets are the squares picked so far.
+public sealed record CastRequest(
+    string Fen, int Mana, int OpponentMana, List<string> OpponentPlayed, List<EffectInput> Effects,
+    string CardId, string Copy, List<string> Targets);
+
+// One of: Error; Copies (pick the card to copy first); Next (the squares the next target can be, StepKind says what
+// they are); or the resolved position: Fen, every effect on the board, and both sides' spirit power after the cast.
+public sealed record CastResponse(
+    string Error, List<string> Copies = null, List<string> Next = null, string StepKind = null, int Step = 0, int Steps = 0,
+    string Fen = null, List<EffectInput> Effects = null, int WhiteMana = 0, int BlackMana = 0);
 
 public static class Analyzer
 {
@@ -28,10 +43,12 @@ public static class Analyzer
     private const int DeepPerCard = 2;
     private const int MaxLinePlies = 12;
     private const int EffectDepthCap = 16;
-    // Opponent card replies are searched shallowly: our top few first moves, their top few targets per card.
+    // Opponent card replies are checked for our top few first moves and their top few targets per card.
     private const int ReplyMoves = 4;
     private const int ReplyPerCard = 4;
+    // The floor for a reply search; a fixed 4 plies costs about 10-35 ms, so time slices below MinReplyMs fall back to it.
     private static readonly SearchLimits ReplyLimits = new() { MaxDepth = 4, MaxNodes = 12000 };
+    private const int MinReplyMs = 20;
     // Fraction of the think time left for reply checks when the opponent holds cards.
     private const double ReplyBudgetShare = 0.35;
 
@@ -63,6 +80,8 @@ public static class Analyzer
         public List<Move> Pv = new();
         // The opponent's best card answer to the end of Pv, when it beats their best plain move.
         public Candidate Reply;
+        // Effects on the board right after the card resolved, before any move.
+        public List<SpellEffect> CastEffects;
     }
 
     private sealed class Response
@@ -71,6 +90,39 @@ public static class Analyzer
         public int Value;
         public List<Move> Pv;
         public Candidate Reply;
+    }
+
+    // The game's position hash leaves out card effects, so a single transposition table hands a search with a
+    // frozen or warded piece the scores from a search where it was free (and back). Boards without effects share
+    // one table; boards with effects get their own, cleared (about 0.35 ms) whenever the effects change.
+    private sealed class Engine
+    {
+        private readonly Searcher _plain = new(20);
+        private readonly Searcher _effects = new(20);
+        private Board.SpellMasks _effectsFor;
+
+        private Searcher For(Board b)
+        {
+            var masks = b.Masks;
+            if (!masks.Any)
+            {
+                return _plain;
+            }
+            if (!masks.Equals(_effectsFor))
+            {
+                _effects.ClearTT();
+                _effectsFor = masks;
+            }
+            return _effects;
+        }
+
+        public SearchResult Search(Board b, SearchLimits limits, CancellationToken ct) => For(b).Search(b, limits, ct);
+
+        public SearchResult ScoreRootMoves(Board b, int depth, int margin, SearchLimits limits, CancellationToken ct, int minDepth, IList<Move> rootMoves) =>
+            For(b).ScoreRootMoves(b, depth, margin, limits, ct, minDepth, rootMoves);
+
+        // QuickEval runs only the quiescence search, which never reads the table.
+        public int QuickEval(Board b) => _plain.QuickEval(b);
     }
 
     public static AnalyzeResponse Run(AnalyzeRequest req, CancellationToken ct)
@@ -99,7 +151,7 @@ public static class Analyzer
             return Fail(e.Message);
         }
 
-        var searcher = new Searcher(20);
+        var searcher = new Engine();
         var clock = Stopwatch.StartNew();
         int budget = Math.Clamp(req.ThinkMs, 500, 60000);
 
@@ -125,16 +177,21 @@ public static class Analyzer
         }
 
         double deepEnd = budget * (checkReplies ? 1 - ReplyBudgetShare : 1);
-        int slice = (int)Math.Max(100, (deepEnd - clock.ElapsedMilliseconds) / deep.Count);
+        double deepMs = deepEnd - clock.ElapsedMilliseconds;
+        // The plain move is what we play unless a card clearly beats it, so it gets half the deep time
+        // rather than an even share with every card candidate.
+        int baselineMs = (int)Math.Max(100, deep.Count == 1 ? deepMs : deepMs / 2);
+        int cardMs = (int)Math.Max(100, (deepMs - baselineMs) / Math.Max(1, deep.Count - 1));
         foreach (var c in deep)
         {
-            Evaluate(searcher, c, new SearchLimits { MaxDepth = 64, TimeMs = slice }, ct);
+            Evaluate(searcher, c, new SearchLimits { MaxDepth = 64, TimeMs = c == baseline ? baselineMs : cardMs }, ct);
         }
         if (checkReplies)
         {
+            var replyLimits = ReplyLimitsFor(budget - clock.ElapsedMilliseconds, deep.Count, state.Sides[us ^ 1].Hand.Distinct().Count());
             foreach (var c in deep)
             {
-                CheckReplies(searcher, c, us, ct);
+                CheckReplies(searcher, c, us, replyLimits, ct);
             }
         }
 
@@ -148,6 +205,67 @@ public static class Analyzer
         return new AnalyzeResponse(
             null, us == 0 ? "white" : "black", ToOption(baseline, baseline.Score, state, us),
             options, Recommend(options, baseline, state, us));
+    }
+
+    public static CastResponse Cast(CastRequest req)
+    {
+        if (!LooksLikeFen(req.Fen))
+        {
+            return new CastResponse("That position could not be read.");
+        }
+        SpellCard card = SpellCatalog.Get(req.CardId ?? "");
+        if (card == null)
+        {
+            return new CastResponse($"Unknown card '{req.CardId}'.");
+        }
+        Board board;
+        SpellState state;
+        try
+        {
+            board = new Board(req.Fen);
+            // The caster always gets to pay: the spirit power shown in the app may lag behind the real game.
+            var analyzeReq = new AnalyzeRequest(req.Fen, Math.Max(req.Mana, card.Cost), req.OpponentMana,
+                new() { card.Id }, new(), req.OpponentPlayed, req.Effects, 0);
+            state = BuildState(board, analyzeReq, board.SideToMove);
+        }
+        catch (ArgumentException e)
+        {
+            return new CastResponse(e.Message);
+        }
+        catch (Exception)
+        {
+            return new CastResponse("That position could not be read.");
+        }
+        int us = board.SideToMove;
+        if (card.Kind == SpellKind.Copy && req.Copy == null)
+        {
+            var copies = state.Copyable(us);
+            return copies.Count > 0 ? new CastResponse(null, Copies: copies) : new CastResponse("There is no played card to copy.");
+        }
+        SpellCard effect = state.EffectOf(us, card, req.Copy);
+        if (effect == null)
+        {
+            return new CastResponse("That card can't be copied.");
+        }
+        var targets = (req.Targets ?? new()).Select(Sq.Parse).ToList();
+        int steps = SpellState.StepCount(effect);
+        if (targets.Count < steps)
+        {
+            var next = state.NextTargets(board, us, card, targets, req.Copy);
+            if (next.Count == 0)
+            {
+                return new CastResponse("It has nothing it can target on this board.");
+            }
+            return new CastResponse(null, Next: next.Select(Sq.Name).ToList(),
+                StepKind: SpellState.StepKind(effect, targets.Count).ToString(), Step: targets.Count, Steps: steps);
+        }
+        var action = new SpellAction { CardId = card.Id, Copy = req.Copy, Targets = targets.ToArray() };
+        if (state.Play(board, us, action) == null)
+        {
+            return new CastResponse("The game wouldn't allow it on this board.");
+        }
+        return new CastResponse(null, Fen: board.ToFen(), Effects: EffectsOut(state.Effects),
+            WhiteMana: state.Sides[0].Mana, BlackMana: state.Sides[1].Mana);
     }
 
     private static SpellState BuildState(Board board, AnalyzeRequest req, int us)
@@ -207,7 +325,7 @@ public static class Analyzer
         return st;
     }
 
-    private static Dictionary<string, List<Candidate>> CardCandidates(Searcher searcher, Board board, SpellState state, int side, CancellationToken ct)
+    private static Dictionary<string, List<Candidate>> CardCandidates(Engine searcher, Board board, SpellState state, int side, CancellationToken ct)
     {
         var groups = new Dictionary<string, List<Candidate>>();
         foreach (string id in state.Sides[side].Hand.Distinct())
@@ -230,10 +348,19 @@ public static class Analyzer
         return groups;
     }
 
+    // Splits the time left over the most reply searches CheckReplies can run: per candidate, up to 1 + ReplyMoves
+    // first moves, each with a plain search plus ReplyPerCard targets per opponent card.
+    private static SearchLimits ReplyLimitsFor(double msLeft, int candidates, int opponentCards)
+    {
+        double searches = candidates * (1 + ReplyMoves) * (1 + ReplyPerCard * opponentCards);
+        int slice = (int)(msLeft / searches);
+        return slice < MinReplyMs ? ReplyLimits : new SearchLimits { MaxDepth = 64, TimeMs = slice };
+    }
+
     // The engine's search knows nothing about cards, so check whether one in the opponent's hand punishes the
     // move we'd play, and if so look for a first move that holds up better. Cards can only help the opponent,
     // so the result never raises the deep score.
-    private static void CheckReplies(Searcher searcher, Candidate c, int us, CancellationToken ct)
+    private static void CheckReplies(Engine searcher, Candidate c, int us, SearchLimits limits, CancellationToken ct)
     {
         if (ct.IsCancellationRequested)
         {
@@ -244,8 +371,8 @@ public static class Analyzer
             var b = c.Board.Clone();
             var s = c.State.Clone();
             s.BeginTurn(b);
-            var (plain, _) = SearchPosition(searcher, b, s, ReplyLimits, ct);
-            var reply = BestReply(searcher, b, s, us ^ 1, ct);
+            var (plain, _) = SearchPosition(searcher, b, s, limits, ct);
+            var reply = BestReply(searcher, b, s, us ^ 1, limits, ct);
             if (reply != null && reply.Score > plain)
             {
                 c.Score = Math.Min(c.Score, -reply.Score);
@@ -258,7 +385,7 @@ public static class Analyzer
         {
             return;
         }
-        var best = Respond(searcher, c.Board, c.State, c.Pv[0], us, ct);
+        var best = Respond(searcher, c.Board, c.State, c.Pv[0], us, limits, ct);
         if (best?.Reply == null)
         {
             return;
@@ -271,7 +398,7 @@ public static class Analyzer
             {
                 continue;
             }
-            var r = Respond(searcher, c.Board, c.State, root.Move, us, ct);
+            var r = Respond(searcher, c.Board, c.State, root.Move, us, limits, ct);
             if (r != null && r.Value > best.Value)
             {
                 best = r;
@@ -283,7 +410,7 @@ public static class Analyzer
     }
 
     // Our move m, then the opponent's turn with their cards. Value is from our side.
-    private static Response Respond(Searcher searcher, Board board, SpellState state, Move m, int us, CancellationToken ct)
+    private static Response Respond(Engine searcher, Board board, SpellState state, Move m, int us, SearchLimits limits, CancellationToken ct)
     {
         var b = board.Clone();
         var s = state.Clone();
@@ -294,8 +421,8 @@ public static class Analyzer
             return null;
         }
         s.BeginTurn(b);
-        var (plain, pv) = SearchPosition(searcher, b, s, ReplyLimits, ct);
-        var reply = BestReply(searcher, b, s, us ^ 1, ct);
+        var (plain, pv) = SearchPosition(searcher, b, s, limits, ct);
+        var reply = BestReply(searcher, b, s, us ^ 1, limits, ct);
         if (reply != null && reply.Score <= plain)
         {
             reply = null;
@@ -303,14 +430,14 @@ public static class Analyzer
         return new Response { Move = m, Value = -(reply?.Score ?? plain), Pv = pv, Reply = reply };
     }
 
-    private static Candidate BestReply(Searcher searcher, Board b, SpellState s, int side, CancellationToken ct)
+    private static Candidate BestReply(Engine searcher, Board b, SpellState s, int side, SearchLimits limits, CancellationToken ct)
     {
         Candidate best = null;
         foreach (var group in CardCandidates(searcher, b, s, side, ct).Values)
         {
             foreach (var r in group.OrderByDescending(x => x.Quick).Take(ReplyPerCard))
             {
-                Evaluate(searcher, r, ReplyLimits, ct);
+                Evaluate(searcher, r, limits, ct);
                 if (best == null || r.Score > best.Score)
                 {
                     best = r;
@@ -320,7 +447,7 @@ public static class Analyzer
         return best;
     }
 
-    private static List<Candidate> Collect(Searcher searcher, Board board, SpellState state, int us, SpellCard card, string copy, CancellationToken ct)
+    private static List<Candidate> Collect(Engine searcher, Board board, SpellState state, int us, SpellCard card, string copy, CancellationToken ct)
     {
         var found = new List<Candidate>();
         SpellCard effect = state.EffectOf(us, card, copy);
@@ -345,7 +472,7 @@ public static class Analyzer
                 s.AfterSkip(b);
                 found.Add(new Candidate
                 {
-                    Action = cast.Action, Start = cast.Board, Board = b, State = s,
+                    Action = cast.Action, Start = cast.Board, Board = b, State = s, CastEffects = cast.CastEffects,
                     Steps = new List<Move> { first, Move.Null }, Quick = searcher.QuickEval(b),
                 });
             }
@@ -406,7 +533,7 @@ public static class Analyzer
             }
             found.Add(new Candidate
             {
-                Action = cast.Action, Start = cast.Board, Board = b, State = s,
+                Action = cast.Action, Start = cast.Board, Board = b, State = s, CastEffects = cast.CastEffects,
                 Steps = steps, OpponentToMove = true, Quick = -searcher.QuickEval(b),
             });
         }
@@ -421,17 +548,20 @@ public static class Analyzer
         {
             return null;
         }
-        return new Candidate { Action = action, Start = b, Board = b, State = s };
+        return new Candidate
+        {
+            Action = action, Start = b, Board = b, State = s, CastEffects = s.Effects.Select(e => e.Copy()).ToList(),
+        };
     }
 
-    private static void Evaluate(Searcher searcher, Candidate c, SearchLimits limits, CancellationToken ct)
+    private static void Evaluate(Engine searcher, Candidate c, SearchLimits limits, CancellationToken ct)
     {
         var (score, pv) = SearchPosition(searcher, c.Board, c.State, limits, ct);
         c.Score = c.OpponentToMove ? -score : score;
         c.Pv = pv;
     }
 
-    private static (int score, List<Move> pv) SearchPosition(Searcher searcher, Board b, SpellState st, SearchLimits limits, CancellationToken ct)
+    private static (int score, List<Move> pv) SearchPosition(Engine searcher, Board b, SpellState st, SearchLimits limits, CancellationToken ct)
     {
         List<Move> allowed = st.TurnMoves(b);
         if (allowed.Count == 0)
@@ -444,6 +574,35 @@ public static class Analyzer
             // (a K+Q vs K with a frozen queen drops from +10 to 0.00 past depth ~24).
             limits.MaxDepth = Math.Min(limits.MaxDepth, EffectDepthCap);
         }
+        if (st.Effects.Count == 0)
+        {
+            return SearchOnce(searcher, b, allowed, limits, ct);
+        }
+        var clock = Stopwatch.StartNew();
+        var first = limits;
+        if (limits.TimeMs > 0)
+        {
+            // Keep half the time for the search from where an effect wears off.
+            first.TimeMs = Math.Max(1, limits.TimeMs / 2);
+        }
+        var (score, pv) = SearchOnce(searcher, b, allowed, first, ct);
+        var rest = limits;
+        if (limits.TimeMs > 0)
+        {
+            rest.TimeMs = Math.Max(1, limits.TimeMs - (int)clock.ElapsedMilliseconds);
+        }
+        var past = PastExpiry(searcher, b, st, pv, rest, ct);
+        if (past != null)
+        {
+            return past.Value;
+        }
+        // No effect wore off along the line, so spend the rest of the time on the same position; the
+        // transposition table lets this pick up where the first search stopped.
+        return limits.TimeMs > 0 ? SearchOnce(searcher, b, allowed, rest, ct) : (score, pv);
+    }
+
+    private static (int score, List<Move> pv) SearchOnce(Engine searcher, Board b, List<Move> allowed, SearchLimits limits, CancellationToken ct)
+    {
         var r = searcher.Search(b, limits, ct);
         if (allowed.Contains(r.BestMove))
         {
@@ -454,18 +613,60 @@ public static class Analyzer
         return (rr.Score, new List<Move> { rr.BestMove });
     }
 
+    // The game's search never ticks effects down, so a 2-turn ward or freeze lasts the whole line (a warded knight
+    // eats a piece and is never recaptured). Play the line through the real rules up to the first ply where an
+    // effect wears off and search again from there. Returns null when no effect wears off along the line.
+    private static (int score, List<Move> pv)? PastExpiry(Engine searcher, Board board, SpellState state, List<Move> pv, SearchLimits limits, CancellationToken ct)
+    {
+        var b = board.Clone();
+        var s = state.Clone();
+        int effects = s.Effects.Count;
+        for (int ply = 0; ply < pv.Count; ply++)
+        {
+            Move m = pv[ply];
+            if (!s.TurnMoves(b).Contains(m))
+            {
+                return null;
+            }
+            int mover = b.SideToMove;
+            b.MakeMove(m);
+            s.AfterMove(b, m, mover);
+            if (s.ExtraStage != 0)
+            {
+                return null;
+            }
+            s.BeginTurn(b);
+            if (s.Effects.Count < effects)
+            {
+                int walked = ply + 1;
+                var (score, line) = SearchPosition(searcher, b, s, limits, ct);
+                // A mate found from the later position is that many plies further from the root.
+                if (Evaluation.IsMateScore(score))
+                {
+                    score += score > 0 ? -walked : walked;
+                }
+                return (walked % 2 == 0 ? score : -score, pv.Take(walked).Concat(line).ToList());
+            }
+        }
+        return null;
+    }
+
     private static PlayOption ToOption(Candidate c, int baselineScore, SpellState state, int us)
     {
         SpellCard card = c.Action == null ? null : SpellCatalog.Get(c.Action.CardId);
         var (targets, targetText, affected) = Describe(c.Action);
         int gain = Clamp(c.Score) - Clamp(baselineScore);
         var line = Line(c.Start, c.Steps, c.Pv);
+        if (c.Action != null && line.Count > 0)
+        {
+            line[0] = line[0] with { Effects = EffectsOut(c.CastEffects) };
+        }
         OpponentReply reply = null;
         if (c.Reply != null)
         {
             var (_, replyText, replyAffected) = Describe(c.Reply.Action);
             reply = new OpponentReply(c.Reply.Action.CardId, c.Reply.Action.Copy, replyText, replyAffected);
-            line.Add("(cast)");
+            line.Add(new Ply("(cast)", null, null, c.Reply.Start.ToFen(), EffectsOut(c.Reply.CastEffects)));
             line.AddRange(Line(c.Reply.Start, c.Reply.Steps, c.Reply.Pv));
         }
         return new PlayOption(
@@ -473,6 +674,16 @@ public static class Analyzer
             card?.Cost ?? 0, c.Score, ScoreText(c.Score), gain,
             card == null ? 0 : Value(card, gain, state, us),
             line.Take(MaxLinePlies + 1).ToList(), reply);
+    }
+
+    // Inverse of BuildState: the game shows (plies + 1) / 2 turns left.
+    private static List<EffectInput> EffectsOut(List<SpellEffect> effects)
+    {
+        return effects
+            .Select(e => (Name: EffectKinds.FirstOrDefault(k => k.Value == e.Kind).Key, Effect: e))
+            .Where(x => x.Name != null)
+            .Select(x => new EffectInput(x.Name, Sq.Name(x.Effect.Square), (x.Effect.Plies + 1) / 2, x.Effect.Owner == 1 ? "black" : "white"))
+            .ToList();
     }
 
     private static (List<string> Targets, string Text, List<string> Affected) Describe(SpellAction action)
@@ -554,20 +765,21 @@ public static class Analyzer
         return (s > 0 ? "M" : "-M") + moves;
     }
 
-    private static List<string> Line(Board start, List<Move> steps, List<Move> pv)
+    private static List<Ply> Line(Board start, List<Move> steps, List<Move> pv)
     {
         var b = start.Clone();
-        var line = new List<string>();
+        var line = new List<Ply>();
         foreach (Move m in steps.Concat(pv).Take(MaxLinePlies))
         {
             if (m.IsNull)
             {
-                line.Add("(skip)");
                 b.MakeNullMove();
+                line.Add(new Ply("(skip)", null, null, b.ToFen()));
                 continue;
             }
-            line.Add(Notation.ToSan(b, m));
+            string san = Notation.ToSan(b, m);
             b.MakeMove(m);
+            line.Add(new Ply(san, Sq.Name(m.From), Sq.Name(m.To), b.ToFen()));
         }
         return line;
     }

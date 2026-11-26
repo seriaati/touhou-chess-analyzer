@@ -20,6 +20,7 @@ app.MapGet("/api/cards", () => cards);
 app.MapGet("/api/avatar/{owner}.png", (string owner) => Image(images.Avatars, owner));
 app.MapGet("/api/icon/{name}.png", (string name) => Image(images.Icons, name));
 app.MapPost("/api/analyze", (AnalyzeRequest req, CancellationToken ct) => Task.Run(() => Analyzer.Run(req, ct), ct));
+app.MapPost("/api/cast", (CastRequest req) => Analyzer.Cast(req));
 
 app.Run();
 
