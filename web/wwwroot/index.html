@@ -19,8 +19,8 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
   header { padding: 14px 20px; border-bottom: 1px solid var(--border); }
-  header h1 { margin: 0; font-size: 19px; }
-  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  header h1 { margin: 0; font-size: 19px; display: flex; align-items: center; gap: 8px; }
+  header h1 img { width: 26px; height: 26px; }
   main { display: grid; grid-template-columns: minmax(300px, 520px) minmax(300px, 1fr) minmax(300px, 1fr); gap: 20px; padding: 20px; max-width: 1800px; }
   @media (max-width: 1280px) { main { grid-template-columns: minmax(300px, 520px) minmax(300px, 1fr); } }
   @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 16px; } }
@@ -75,6 +75,8 @@
   button.primary:disabled { opacity: .6; cursor: progress; }
   button.small:disabled { opacity: .5; cursor: default; }
   button.small { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 13px; }
+  button.icon { display: inline-flex; align-items: center; justify-content: center; align-self: stretch; padding: 0 9px; }
+  button.icon svg { width: 16px; height: 16px; }
 
   .dd { position: relative; min-width: 150px; }
   .dd-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 4px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 8px; cursor: pointer; text-align: left; font: inherit; font-size: 14px; }
@@ -155,8 +157,7 @@
 </head>
 <body>
 <header>
-  <h1>Touhou Chess Analyzer</h1>
-  <p>Set up the position, effects and both hands, then analyze. Uses the game's own rules and engine.</p>
+  <h1><img src="favicon.svg" alt="">Touhou Chess Analyzer</h1>
 </header>
 <main>
   <div>
@@ -165,11 +166,14 @@
       <div class="tray" id="pieces"></div>
       <div class="tray" id="effects"></div>
       <div class="row">
-        <button class="small" id="back" title="Back one move">◀ Back</button>
-        <button class="small" id="fwd" title="Forward one move">Forward ▶</button>
+        <button class="small icon" id="back" title="Back one move" aria-label="Back one move">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="small icon" id="fwd" title="Forward one move" aria-label="Forward one move">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         <button class="small" id="flip">Flip board</button>
-        <button class="small" id="start">Start position</button>
-        <button class="small" id="clear">Clear board</button>
+        <button class="small" id="start">Reset</button>
       </div>
     </section>
     <section>
@@ -852,8 +856,8 @@ function castPromptHtml() {
 
 const pickers = {};
 
-function renderCardList(listEl, ids, empty, color) {
-  listEl.innerHTML = (ids.map(id => cardHtml(id, color)).join('') || `<p class="note">${empty}</p>`)
+function renderCardList(listEl, ids, color) {
+  listEl.innerHTML = ids.map(id => cardHtml(id, color)).join('')
     + (castNote?.color === color ? `<p class="note cast-note">${esc(castNote.text)}</p>` : '');
   listEl.querySelectorAll('.x').forEach(b => b.onclick = () => { takeFromHand(color, b.dataset.id); renderCards(); });
   listEl.querySelectorAll('.cast-btn').forEach(b => b.onclick = () => startCast(color, b.dataset.id));
@@ -941,8 +945,8 @@ function castCard(color, id) {
 }
 
 function renderCards() {
-  renderCardList($('hand'), hand, 'No cards in hand yet.', side);
-  renderCardList($('oppHand'), oppHand, 'Add the cards you know they hold. The engine checks their best card reply to each line.', other(side));
+  renderCardList($('hand'), hand, side);
+  renderCardList($('oppHand'), oppHand, other(side));
   pickers.hand.set(cardItems(hand), {
     placeholder: hand.length >= HAND_CAP ? `Hand is full (${HAND_CAP} cards)` : '+ Add a card to your hand',
     disabled: hand.length >= HAND_CAP,
@@ -1176,7 +1180,6 @@ $('start').onclick = () => {
   hand = []; oppHand = []; oppPlayed = [];
   resetHistory(); renderBoard(); renderCards();
 };
-$('clear').onclick = () => { board = {}; effects = []; resetHistory(); renderBoard(); };
 $('loadFen').onclick = () => {
   applyFen($('fen').value);
   side = turn;
