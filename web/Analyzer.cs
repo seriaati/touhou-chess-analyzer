@@ -19,8 +19,9 @@ public sealed record PlayOption(
     string CardId, string Copy, List<string> Targets, string TargetText, List<string> Affected, int Cost,
     int Score, string ScoreText, int Gain, int Value, List<Ply> Line, OpponentReply Reply);
 
+// Saving is the Ultimate being saved for when that alone kept the best card from being recommended.
 public sealed record AnalyzeResponse(
-    string Error, string SideToMove, PlayOption NoCard, List<PlayOption> Cards, string Recommended);
+    string Error, string SideToMove, PlayOption NoCard, List<PlayOption> Cards, string Recommended, string Saving = null);
 
 // The card is cast by the side to move in Fen. Targets are the squares picked so far.
 public sealed record CastRequest(
@@ -202,9 +203,10 @@ public static class Analyzer
             .OrderByDescending(o => o.Value)
             .ToList();
 
+        var (recommended, saving) = Recommend(options, baseline, state, us);
         return new AnalyzeResponse(
             null, us == 0 ? "white" : "black", ToOption(baseline, baseline.Score, state, us),
-            options, Recommend(options, baseline, state, us));
+            options, recommended, saving);
     }
 
     public static CastResponse Cast(CastRequest req)
@@ -723,23 +725,28 @@ public static class Analyzer
         return (int)(gain - penalty + (card.Ultimate && gain >= 40 ? 120 : 0));
     }
 
-    private static string Recommend(List<PlayOption> options, Candidate baseline, SpellState state, int us)
+    private static (string Recommended, string Saving) Recommend(List<PlayOption> options, Candidate baseline, SpellState state, int us)
     {
         var best = options.FirstOrDefault();
         if (best == null)
         {
-            return null;
+            return (null, null);
         }
         if (baseline.State.TurnMoves(baseline.Board).Count == 0)
         {
-            return best.CardId;
+            return (best.CardId, null);
         }
         SpellCard saving = SavingFor(state, us);
+        bool worthIt = best.Gain >= 300 || best.Value >= 55;
         if (saving != null && best.CardId != saving.Id)
         {
-            return best.Gain >= 500 ? best.CardId : null;
+            if (best.Gain >= 500)
+            {
+                return (best.CardId, null);
+            }
+            return (null, worthIt ? saving.Id : null);
         }
-        return best.Gain >= 300 || best.Value >= 55 ? best.CardId : null;
+        return (worthIt ? best.CardId : null, null);
     }
 
     private static SpellCard SavingFor(SpellState state, int us)

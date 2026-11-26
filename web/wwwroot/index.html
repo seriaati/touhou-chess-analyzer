@@ -1083,6 +1083,11 @@ function renderResult(d) {
     const target = rec.targets.length ? ` on ${esc(rec.targetText || '—')}` : '';
     verdict = `Cast ${cardTitle(rec.cardId, rec.copy)}${target}, then play ${firstMove || '—'}`
       + `<small>Evaluation ${rec.scoreText} (${rec.gain >= 0 ? '+' : ''}${(rec.gain / 100).toFixed(2)} vs. not casting) · costs ${rec.cost} spirit power</small>`;
+  } else if (d.saving) {
+    const best = d.cards[0];
+    verdict = `Play ${firstMove || '(no legal move)'}`
+      + `<small>Evaluation ${d.noCard.scoreText}. Saving spirit power for ${cardTitle(d.saving)} (${cardById(d.saving).cost}):`
+      + ` ${cardTitle(best.cardId, best.copy)} would gain +${(best.gain / 100).toFixed(2)}, not enough to delay it.</small>`;
   } else {
     verdict = `Play ${firstMove || '(no legal move)'}`
       + `<small>Evaluation ${d.noCard.scoreText}. No card in hand is worth its spirit power here${d.cards.length ? '' : ' (none are playable)'}.</small>`;
