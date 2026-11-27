@@ -682,7 +682,7 @@ function castle(piece, from, to) {
 function drop(payload, sq) {
   if (payload.piece) {
     if (payload.from === sq || (!payload.from && !sq)) return;
-    let piece = payload.piece, cut;
+    let piece = payload.piece, cut, takenSq, countered;
     const target = sq && board[sq];
     const isMove = payload.from && sq && (!target || colorOf(target) !== colorOf(piece));
     if (isMove) {
@@ -690,7 +690,9 @@ function drop(payload, sq) {
       const mover = colorOf(piece), victim = other(mover);
       const pawn = piece.toLowerCase() === 'p';
       const passedSq = pawn && !target && sq === ep && sq[0] !== payload.from[0] ? sq[0] + payload.from[1] : null;
-      const takenSq = target ? sq : passedSq;
+      takenSq = target ? sq : passedSq;
+      // Board.CaptureAfterEffects: capturing a Counter piece removes the capturer too, unless it's a king.
+      countered = takenSq && piece.toLowerCase() !== 'k' && effects.some(e => e.sq === takenSq && e.kind === 'counter');
       // A cut skips the other side's turn: it never begins, so it brings no spirit power and no effect ticks down.
       cut = slash?.color === mover && slash.square === payload.from ? slash.cuts[sq] : undefined;
       slash = cut ? { ...cut, color: mover } : null;
@@ -716,6 +718,13 @@ function drop(payload, sq) {
     }
     if (sq) board[sq] = piece;
     if (isMove) {
+      spendEffects(sq, !!takenSq);
+      // Refunded as what it became, so a pawn promoting onto a Counter piece refunds a queen.
+      if (countered) {
+        if (!effects.some(e => e.sq === sq && e.kind === 'clone')) addSpirit(colorOf(piece), PIECE_VALUE[piece.toLowerCase()]);
+        delete board[sq];
+        effects = effects.filter(e => e.sq !== sq);
+      }
       castle(piece, payload.from, sq);
       if (!cut) tickEffects(colorOf(piece));
       pushHistory();
@@ -739,6 +748,11 @@ function ownerColor(e) {
   if (e.barrier) return e.barrier === 'mine' ? side : other(side);
   const pieceColor = colorOf(board[e.sq]);
   return EFFECTS.find(x => x.id === e.kind).debuff ? other(pieceColor) : pieceColor;
+}
+
+// SpellState.AfterMove: any move, by either side, spends every Leap and Pierce, and a Fated piece that captures is freed.
+function spendEffects(to, captured) {
+  effects = effects.filter(e => e.kind !== 'leap' && e.kind !== 'pierce' && !(captured && e.sq === to && e.kind === 'fate'));
 }
 
 // The game ticks an effect once per ply and shows ceil(plies / 2) turns left, so the count drops each time
@@ -1136,6 +1150,7 @@ function playLine(opt, upto) {
       // A skipped turn (The World) never begins, so it brings no spirit power.
       if (opt.line[i + 1]?.san !== '(skip)') addSpirit(victim, 1);
       effects = effects.filter(e => e.sq !== ply.to).map(e => e.sq === ply.from ? { ...e, sq: ply.to } : e);
+      spendEffects(ply.to, ply.san.includes('x'));
     }
     applyFen(ply.fen);
     if (ply.from) tickEffects(other(toMove));
