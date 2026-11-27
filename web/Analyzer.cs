@@ -190,9 +190,10 @@ public static class Analyzer
         if (checkReplies)
         {
             var replyLimits = ReplyLimitsFor(budget - clock.ElapsedMilliseconds, deep.Count, state.Sides[us ^ 1].Hand.Distinct().Count());
-            foreach (var c in deep)
+            for (int i = 0; i < deep.Count; i++)
             {
-                CheckReplies(searcher, c, us, replyLimits, ct);
+                long end = clock.ElapsedMilliseconds + (budget - clock.ElapsedMilliseconds) / (deep.Count - i);
+                CheckReplies(searcher, deep[i], us, replyLimits, () => clock.ElapsedMilliseconds >= end, ct);
             }
         }
 
@@ -361,8 +362,9 @@ public static class Analyzer
 
     // The engine's search knows nothing about cards, so check whether one in the opponent's hand punishes the
     // move we'd play, and if so look for a first move that holds up better. Cards can only help the opponent,
-    // so the result never raises the deep score.
-    private static void CheckReplies(Engine searcher, Candidate c, int us, SearchLimits limits, CancellationToken ct)
+    // so the result never raises the deep score. The fixed-size reply searches can run far slower in WebAssembly
+    // than ReplyLimitsFor plans for, so other first moves are only tried until outOfTime.
+    private static void CheckReplies(Engine searcher, Candidate c, int us, SearchLimits limits, Func<bool> outOfTime, CancellationToken ct)
     {
         if (ct.IsCancellationRequested)
         {
@@ -396,6 +398,10 @@ public static class Analyzer
         var ranked = searcher.ScoreRootMoves(c.Board, 2, 2 * Evaluation.Mate, ReplyLimits, ct, 1, allowed).RootScores ?? new();
         foreach (var root in ranked.OrderByDescending(x => x.Score).Take(ReplyMoves))
         {
+            if (outOfTime())
+            {
+                break;
+            }
             if (root.Move.Equals(best.Move) || !allowed.Contains(root.Move))
             {
                 continue;
