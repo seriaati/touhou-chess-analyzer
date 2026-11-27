@@ -10,9 +10,11 @@ public sealed record EffectInput(string Kind, string Square, int Turns, string O
 // and keeps the turn, mapped to the slash after that cut.
 public sealed record SlashChain(string Square, string Kind, int Left, bool Extra, Dictionary<string, SlashChain> Cuts = null);
 
+// Previous is the game's earlier positions as FENs, oldest first.
 public sealed record AnalyzeRequest(
     string Fen, int Mana, int OpponentMana, List<string> Hand, List<string> OpponentHand,
-    List<string> OpponentPlayed, List<EffectInput> Effects, int ThinkMs, SlashChain Chain = null);
+    List<string> OpponentPlayed, List<EffectInput> Effects, int ThinkMs, SlashChain Chain = null,
+    List<string> Previous = null);
 
 public sealed record OpponentReply(string CardId, string Copy, string TargetText, List<string> Affected);
 
@@ -245,6 +247,7 @@ public static class Analyzer
         {
             return "That FEN could not be read.";
         }
+        board = WithHistory(board, req.Previous);
         try
         {
             state = BuildState(board, req, board.SideToMove);
@@ -254,6 +257,59 @@ public static class Analyzer
             return e.Message;
         }
         return null;
+    }
+
+    // The engine scores a move back into any position in the board's move history as a draw, but a board loaded from
+    // a FEN has no history, so it would happily repeat a won position into a draw. This replays the moves since the
+    // last capture or pawn move; it stops early wherever no single legal move links two positions (a card was cast).
+    private static Board WithHistory(Board board, List<string> previous)
+    {
+        var moves = new List<Move>();
+        var next = board;
+        Board start = null;
+        for (int i = (previous?.Count ?? 0) - 1; i >= 0; i--)
+        {
+            Board prev;
+            try
+            {
+                prev = new Board(previous[i]);
+            }
+            catch (Exception)
+            {
+                break;
+            }
+            var (move, irreversible) = MoveBetween(prev, next);
+            if (move.IsNull || irreversible)
+            {
+                break;
+            }
+            moves.Insert(0, move);
+            start = next = prev;
+        }
+        if (start == null)
+        {
+            return board;
+        }
+        foreach (var m in moves)
+        {
+            start.MakeMove(m);
+        }
+        return start;
+    }
+
+    private static (Move Move, bool Irreversible) MoveBetween(Board from, Board to)
+    {
+        foreach (Move m in MoveGenerator.LegalMoves(from))
+        {
+            var b = from.Clone();
+            b.MakeMove(m);
+            if (b.Key == to.Key)
+            {
+                // MakeMove resets the clock only for a capture or a pawn move.
+                return (m, b.HalfmoveClock == 0);
+            }
+        }
+        return (Move.Null, false);
     }
 
     public static CastResponse Cast(CastRequest req)

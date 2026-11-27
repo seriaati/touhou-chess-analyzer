@@ -511,18 +511,25 @@ function placementToBoard(placement) {
   return b;
 }
 
-function fen() {
+function fen(snap = snapshot()) {
   let rows = [];
   for (let r = 7; r >= 0; r--) {
     let row = '', empty = 0;
     for (let f = 0; f < 8; f++) {
-      const p = board[sqName(f, r)];
+      const p = snap.board[sqName(f, r)];
       if (p) { if (empty) row += empty; empty = 0; row += p; } else empty++;
     }
     rows.push(row + (empty || ''));
   }
-  let castle = ['K', 'Q', 'k', 'q'].filter(c => $('c' + c).checked).join('') || '-';
-  return `${rows.join('/')} ${turn} ${castle} ${ep} 0 ${moveNo}`;
+  return `${rows.join('/')} ${snap.turn} ${snap.castling || '-'} ${snap.ep} 0 ${snap.moveNo}`;
+}
+
+// The positions before the one on the board, for the engine to spot repetitions. They stop at the last one with card
+// effects: the game's position hash includes effects, so a plain FEN of it would stand for a different position.
+function previousFens() {
+  const fens = [];
+  for (let i = at - 1; i >= 0 && !history[i].effects.length; i--) fens.unshift(fen(history[i]));
+  return fens;
 }
 
 function pieceHtml(p) {
@@ -1239,12 +1246,12 @@ function analysisRequest() {
   return {
     fen: fen(), mana: +$('mana').value, opponentMana: +$('oppMana').value,
     hand: [...hand], opponentHand: [...oppHand], opponentPlayed: [...oppPlayed], effects: effectPayload(), thinkMs: +thinkMs,
-    chain: chainPayload(),
+    chain: chainPayload(), previous: previousFens(),
   };
 }
 
-// Think time doesn't change which position was analyzed.
-const positionKey = ({ thinkMs, ...position }) => JSON.stringify(position);
+// Neither think time nor the moves that led here change which position was analyzed.
+const positionKey = ({ thinkMs, previous, ...position }) => JSON.stringify(position);
 
 function showSavedAnalysis() {
   const key = positionKey(analysisRequest());
@@ -1301,7 +1308,7 @@ let evalRunning = false;
 // always moves on to the one on the board now.
 function requestEval() {
   $('eval').classList.toggle('flipped', flipped);
-  const key = JSON.stringify({ fen: fen(), effects: effectPayload(), chain: chainPayload(), thinkMs: EVAL_MS });
+  const key = JSON.stringify({ fen: fen(), effects: effectPayload(), chain: chainPayload(), thinkMs: EVAL_MS, previous: previousFens() });
   if (key === evalKey) return;
   evalKey = key;
   if (!evalRunning) runEval();
