@@ -1,5 +1,7 @@
 # Touhou Chess Analyzer
 
+![Touhou Chess Analyzer recommending the move exf3+ on a chess board](web/wwwroot/og-image.png)
+
 A card-aware move analyzer for [Touhou Chess](https://store.steampowered.com/app/5482350/). Simply set up the current game's condition and click "Analyze", the analyzer will tell you the next best move.
 
 ![The analyzer recommending a move, with both players' cards and the opponent's best card reply](docs/screenshot.png)
