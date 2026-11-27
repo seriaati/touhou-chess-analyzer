@@ -1349,7 +1349,11 @@ const sideItems = [
   { value: 'w', html: `${pieceHtml('K')} White` },
   { value: 'b', html: `${pieceHtml('k')} Black` },
 ];
-const sidePicker = makeDropdown($('side'), { keepValue: true, onSelect: v => { side = v; renderBoard(); } });
+const sidePicker = makeDropdown($('side'), { keepValue: true, onSelect: v => {
+  // Before the first move the boxes still hold the start's spirit power, which belongs to a colour, not to "you".
+  if (v !== side && history.length === 1) [$('mana').value, $('oppMana').value] = [$('oppMana').value, $('mana').value];
+  side = v; renderBoard();
+} });
 sidePicker.set(sideItems, { value: side });
 
 let thinkMs = '5000';
@@ -1370,6 +1374,7 @@ $('fwd').onclick = () => step(1);
 $('start').onclick = () => {
   board = placementToBoard(START); effects = [];
   $('mana').value = 0; $('oppMana').value = 0;
+  addSpirit('w', 1);
   ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = true);
   turn = 'w'; ep = '-'; moveNo = 1;
   hand = []; oppHand = []; oppPlayed = []; slash = null;
@@ -1426,6 +1431,8 @@ document.querySelectorAll('.stepper').forEach(stepper => {
 });
 
 board = placementToBoard(START);
+// MatchController.Begin starts White's first turn before any move, so White opens with 1 spirit power.
+addSpirit('w', 1);
 resetHistory();
 try {
   const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
