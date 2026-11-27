@@ -1137,6 +1137,9 @@ function playLine(opt, upto) {
     if (ply.san === '(cast)') {
       oppHand = oppHand.filter(h => h !== opt.reply.cardId);
       castCard(other(side), opt.reply.cardId);
+      // The engine refunds pieces the card takes (Vampire's thrall, Gungnir's target); applying the FEN would hide them.
+      const after = placementToBoard(placement);
+      ['w', 'b'].forEach(c => addSpirit(c, lostValue(board, after, c)));
     }
     if (ply.effects) effects = ply.effects.map(effectFromServer);
     if (ply.from) {
