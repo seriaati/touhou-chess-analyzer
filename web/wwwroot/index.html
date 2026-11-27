@@ -263,6 +263,9 @@
       </div>
       <div class="row"><div class="grow" id="addCard"></div></div>
       <div class="hand" id="hand"></div>
+      <h3>Cards you have played (for their Kourindou Appraisal)</h3>
+      <div class="row" style="margin-top:0"><div class="grow" id="addPlayed"></div></div>
+      <div class="chips" id="played"></div>
     </section>
     <section>
       <h2>Opponent</h2>
@@ -278,7 +281,7 @@
       <h3>Cards in their hand</h3>
       <div class="row" style="margin-top:0"><div class="grow" id="addOppHand"></div></div>
       <div class="hand" id="oppHand"></div>
-      <h3>Cards they have played (for Kourindou Appraisal)</h3>
+      <h3>Cards they have played (for your Kourindou Appraisal)</h3>
       <div class="row" style="margin-top:0"><div class="grow" id="addOpp"></div></div>
       <div class="chips" id="oppPlayed"></div>
     </section>
@@ -343,6 +346,7 @@ let cards = [];
 let hand = [];
 let oppHand = [];
 let oppPlayed = [];
+let played = [];
 
 // The game's engine, compiled to WebAssembly, runs in workers so searches don't freeze the page.
 // Casting gets its own worker so picking targets stays responsive while an analysis runs.
@@ -602,7 +606,7 @@ function addSpirit(color, n) {
 function snapshot() {
   return { board: { ...board }, effects: effects.map(e => ({ ...e })), mana: +$('mana').value, oppMana: +$('oppMana').value,
     castling: ['K', 'Q', 'k', 'q'].filter(c => $('c' + c).checked).join(''), turn, ep, moveNo,
-    hand: [...hand], oppHand: [...oppHand], oppPlayed: [...oppPlayed], slash };
+    hand: [...hand], oppHand: [...oppHand], oppPlayed: [...oppPlayed], played: [...played], slash };
 }
 
 function restore(snap) {
@@ -612,7 +616,7 @@ function restore(snap) {
   $('oppMana').value = snap.oppMana;
   ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = snap.castling.includes(c));
   ({ turn, ep, moveNo } = snap);
-  hand = [...snap.hand]; oppHand = [...snap.oppHand]; oppPlayed = [...snap.oppPlayed];
+  hand = [...snap.hand]; oppHand = [...snap.oppHand]; oppPlayed = [...snap.oppPlayed]; played = [...(snap.played ?? [])];
   slash = snap.slash ?? null;
 }
 
@@ -988,7 +992,7 @@ async function castStep() {
       // The engine only lets the side to move cast, so the caster is put on move for the request.
       fen: `${placement} ${c.color} ${castle} ${c.color === turn ? passant : '-'} ${half} ${move}`,
       mana: +$(mine ? 'mana' : 'oppMana').value, opponentMana: +$(mine ? 'oppMana' : 'mana').value,
-      opponentPlayed: mine ? oppPlayed : [], effects: effectPayload(),
+      opponentPlayed: mine ? oppPlayed : played, effects: effectPayload(),
       cardId: c.id, copy: c.copy, targets: c.targets,
     });
   } catch (e) {
@@ -1026,7 +1030,7 @@ function finishCast(c, d) {
   $('mana').value = side === 'w' ? d.whiteMana : d.blackMana;
   $('oppMana').value = side === 'w' ? d.blackMana : d.whiteMana;
   takeFromHand(c.color, c.id);
-  if (c.color !== side && !oppPlayed.includes(c.id)) oppPlayed.push(c.id);
+  logPlayed(c.color, c.id);
   slash = d.chain ? { ...d.chain, color: c.color } : null;
 }
 
@@ -1041,7 +1045,12 @@ function cancelCast() {
 // Paying for and logging a cast card; the caller takes it out of the hand.
 function castCard(color, id) {
   addSpirit(color, -cardById(id).cost);
-  if (color !== side && !oppPlayed.includes(id)) oppPlayed.push(id);
+  logPlayed(color, id);
+}
+
+function logPlayed(color, id) {
+  const ids = color === side ? played : oppPlayed;
+  if (!ids.includes(id)) ids.push(id);
 }
 
 function renderCards() {
@@ -1056,16 +1065,23 @@ function renderCards() {
     disabled: oppHand.length >= HAND_CAP,
   });
   pickers.oppPlayed.set(cardItems(oppPlayed));
-  const handFull = oppHand.length >= HAND_CAP;
-  $('oppPlayed').innerHTML = oppPlayed.map(id => `<div class="chip">${avatar(cardById(id).owner, 'sm')}<span class="name">${esc(cardById(id).name)}</span>
-    <button data-id="${id}" data-to-hand ${handFull ? 'disabled' : ''} title="${handFull ? `Their hand is full (${HAND_CAP} cards)` : 'They drew it back: move it to their hand'}">↩ Hand</button>
+  pickers.played.set(cardItems(played));
+  renderPlayed($('oppPlayed'), oppPlayed, oppHand, 'Their hand is full', 'They drew it back: move it to their hand');
+  renderPlayed($('played'), played, hand, 'Your hand is full', 'You drew it back: move it to your hand');
+  save();
+}
+
+// ids and handIds are changed in place: the arrays are shared with the rest of the page.
+function renderPlayed(el, ids, handIds, fullTitle, backTitle) {
+  const handFull = handIds.length >= HAND_CAP;
+  el.innerHTML = ids.map(id => `<div class="chip">${avatar(cardById(id).owner, 'sm')}<span class="name">${esc(cardById(id).name)}</span>
+    <button data-id="${id}" data-to-hand ${handFull ? 'disabled' : ''} title="${handFull ? `${fullTitle} (${HAND_CAP} cards)` : backTitle}">↩ Hand</button>
     <button data-id="${id}" title="Remove">×</button></div>`).join('');
-  $('oppPlayed').querySelectorAll('button').forEach(b => b.onclick = () => {
-    oppPlayed = oppPlayed.filter(h => h !== b.dataset.id);
-    if ('toHand' in b.dataset) oppHand.push(b.dataset.id);
+  el.querySelectorAll('button').forEach(b => b.onclick = () => {
+    ids.splice(ids.indexOf(b.dataset.id), 1);
+    if ('toHand' in b.dataset) handIds.push(b.dataset.id);
     renderCards();
   });
-  save();
 }
 
 
@@ -1263,7 +1279,7 @@ async function analyze() {
 function analysisRequest() {
   return {
     fen: fen(), mana: +$('mana').value, opponentMana: +$('oppMana').value,
-    hand: [...hand], opponentHand: [...oppHand], opponentPlayed: [...oppPlayed], effects: effectPayload(), thinkMs: +thinkMs,
+    hand: [...hand], opponentHand: [...oppHand], opponentPlayed: [...oppPlayed], played: [...played], effects: effectPayload(), thinkMs: +thinkMs,
     chain: chainPayload(), previous: previousFens(),
   };
 }
@@ -1385,6 +1401,8 @@ pickers.oppHand = makeDropdown($('addOppHand'), { search: true, wide: true,
   onSelect: id => { if (oppHand.length < HAND_CAP) oppHand.push(id); renderCards(); } });
 pickers.oppPlayed = makeDropdown($('addOpp'), { search: true, wide: true, placeholder: '+ Add a card they played',
   onSelect: id => { oppPlayed.push(id); renderCards(); } });
+pickers.played = makeDropdown($('addPlayed'), { search: true, wide: true, placeholder: '+ Add a card you played',
+  onSelect: id => { played.push(id); renderCards(); } });
 
 $('flip').onclick = () => { flipped = !flipped; renderBoard(); };
 $('back').onclick = () => step(-1);
@@ -1395,7 +1413,7 @@ $('start').onclick = () => {
   addSpirit('w', 1);
   ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = true);
   turn = 'w'; ep = '-'; moveNo = 1;
-  hand = []; oppHand = []; oppPlayed = []; slash = null;
+  hand = []; oppHand = []; oppPlayed = []; played = []; slash = null;
   analyses = []; saveAnalyses();
   resetHistory(); renderBoard(); renderCards();
 };
@@ -1468,7 +1486,7 @@ renderBoard();
 fetch('game/cards.json').then(r => r.json()).then(list => {
   cards = list;
   // Saved hands may name cards a game update removed.
-  [hand, oppHand, oppPlayed] = [hand, oppHand, oppPlayed].map(ids => ids.filter(cardById));
+  [hand, oppHand, oppPlayed, played] = [hand, oppHand, oppPlayed, played].map(ids => ids.filter(cardById));
   renderCards();
   showSavedAnalysis();
 });

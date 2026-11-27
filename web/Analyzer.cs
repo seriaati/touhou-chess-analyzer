@@ -10,11 +10,12 @@ public sealed record EffectInput(string Kind, string Square, int Turns, string O
 // and keeps the turn, mapped to the slash after that cut.
 public sealed record SlashChain(string Square, string Kind, int Left, bool Extra, Dictionary<string, SlashChain> Cuts = null);
 
-// Previous is the game's earlier positions as FENs, oldest first.
+// Previous is the game's earlier positions as FENs, oldest first. Played is what the opponent's
+// Kourindou Appraisal can copy, as OpponentPlayed is for ours.
 public sealed record AnalyzeRequest(
     string Fen, int Mana, int OpponentMana, List<string> Hand, List<string> OpponentHand,
     List<string> OpponentPlayed, List<EffectInput> Effects, int ThinkMs, SlashChain Chain = null,
-    List<string> Previous = null);
+    List<string> Previous = null, List<string> Played = null);
 
 public sealed record OpponentReply(string CardId, string Copy, string TargetText, List<string> Affected);
 
@@ -419,7 +420,7 @@ public static class Analyzer
         {
             throw new ArgumentException($"A hand holds at most {SpellState.HandCap} cards.");
         }
-        foreach (string id in hand.Concat(opponentHand).Concat(req.OpponentPlayed ?? new()))
+        foreach (string id in hand.Concat(opponentHand).Concat(req.OpponentPlayed ?? new()).Concat(req.Played ?? new()))
         {
             if (SpellCatalog.Get(id) == null)
             {
@@ -436,6 +437,7 @@ public static class Analyzer
         st.Sides[us].Mana = Math.Clamp(req.Mana, 0, SpellState.ManaCap);
         st.Sides[us ^ 1].Mana = Math.Clamp(req.OpponentMana, 0, SpellState.ManaCap);
         st.Sides[us ^ 1].Played.AddRange((req.OpponentPlayed ?? new()).Distinct());
+        st.Sides[us].Played.AddRange((req.Played ?? new()).Distinct());
         st.TurnSide = us;
 
         foreach (var e in req.Effects ?? new())
