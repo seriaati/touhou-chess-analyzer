@@ -2,6 +2,8 @@
 
 A card-aware move analyzer for [Touhou Chess](https://store.steampowered.com/app/5482350/). Simply set up the current game's condition and click "Analyze", the analyzer will tell you the next best move.
 
+![The analyzer recommending a move, with both players' cards and the opponent's best card reply](docs/screenshot.png)
+
 WARNING: This tools is for educational use only, you can use it for analyzing games afterwards, but do NOT use it during online matches, that is cheating!
 
 ## How the analyzer works
