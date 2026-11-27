@@ -4,9 +4,15 @@ using TouhouChess.Core.Spell;
 
 public sealed record EffectInput(string Kind, string Square, int Turns, string Owner);
 
+// A Youmu slash (SpellKind.HitAndRun or Slashes) in progress for the side to move. Before the first cut (Extra false)
+// Square is the armed piece; after one it is the piece that cut and moves again. Kind and Left are SpellState's
+// ArmKind/ArmLeft or ChainMode/ChainLeft. Cuts is only in responses: each square the piece can move to that cuts
+// and keeps the turn, mapped to the slash after that cut.
+public sealed record SlashChain(string Square, string Kind, int Left, bool Extra, Dictionary<string, SlashChain> Cuts = null);
+
 public sealed record AnalyzeRequest(
     string Fen, int Mana, int OpponentMana, List<string> Hand, List<string> OpponentHand,
-    List<string> OpponentPlayed, List<EffectInput> Effects, int ThinkMs);
+    List<string> OpponentPlayed, List<EffectInput> Effects, int ThinkMs, SlashChain Chain = null);
 
 public sealed record OpponentReply(string CardId, string Copy, string TargetText, List<string> Affected);
 
@@ -29,10 +35,11 @@ public sealed record CastRequest(
     string CardId, string Copy, List<string> Targets);
 
 // One of: Error; Copies (pick the card to copy first); Next (the squares the next target can be, StepKind says what
-// they are); or the resolved position: Fen, every effect on the board, and both sides' spirit power after the cast.
+// they are); or the resolved position: Fen, every effect on the board, both sides' spirit power after the cast, and
+// Chain when the card armed a piece.
 public sealed record CastResponse(
     string Error, List<string> Copies = null, List<string> Next = null, string StepKind = null, int Step = 0, int Steps = 0,
-    string Fen = null, List<EffectInput> Effects = null, int WhiteMana = 0, int BlackMana = 0);
+    string Fen = null, List<EffectInput> Effects = null, int WhiteMana = 0, int BlackMana = 0, SlashChain Chain = null);
 
 public static class Analyzer
 {
@@ -158,12 +165,18 @@ public static class Analyzer
 
         var baseline = new Candidate { Start = board, Board = board.Clone(), State = state.Clone() };
         var groups = CardCandidates(searcher, board, state, us, ct);
+        // A piece armed by a slash cast earlier this turn can still cut; those lines are plain moves, not card options.
+        var chains = new List<Candidate>();
+        if (state.ArmSq >= 0)
+        {
+            AddChains(searcher, baseline, us, chains, ct);
+        }
         bool checkReplies = state.Sides[us ^ 1].Hand.Count > 0;
 
         var shallow = new SearchLimits { MaxDepth = 4, MaxNodes = 20000 };
         Evaluate(searcher, baseline, shallow, ct);
         var deep = new List<Candidate> { baseline };
-        foreach (var group in groups.Values)
+        foreach (var group in groups.Values.Append(chains))
         {
             var top = group.OrderByDescending(c => c.Quick).Take(ShallowPerCard).ToList();
             foreach (var c in top)
@@ -197,16 +210,17 @@ public static class Analyzer
             }
         }
 
+        var noCard = deep.Where(c => c.Action == null).MaxBy(c => c.Score);
         var options = groups.Values
             .Select(g => g.Where(deep.Contains).MaxBy(c => c.Score))
             .Where(c => c != null)
-            .Select(c => ToOption(c, baseline.Score, state, us))
+            .Select(c => ToOption(c, noCard.Score, state, us))
             .OrderByDescending(o => o.Value)
             .ToList();
 
         var (recommended, saving) = Recommend(options, baseline, state, us);
         return new AnalyzeResponse(
-            null, us == 0 ? "white" : "black", ToOption(baseline, baseline.Score, state, us),
+            null, us == 0 ? "white" : "black", ToOption(noCard, noCard.Score, state, us),
             options, recommended, saving);
     }
 
@@ -268,7 +282,37 @@ public static class Analyzer
             return new CastResponse("The game wouldn't allow it on this board.");
         }
         return new CastResponse(null, Fen: board.ToFen(), Effects: EffectsOut(state.Effects),
-            WhiteMana: state.Sides[0].Mana, BlackMana: state.Sides[1].Mana);
+            WhiteMana: state.Sides[0].Mana, BlackMana: state.Sides[1].Mana,
+            Chain: state.ArmSq >= 0 ? ChainOf(board, state, us) : null);
+    }
+
+    // Every cut the armed or chaining piece can make from here, each played through the game's own rules
+    // (SpellState.ContinueChain decides whether a capture keeps the turn).
+    private static SlashChain ChainOf(Board board, SpellState state, int us)
+    {
+        bool extra = state.ExtraStage == 2;
+        int sq = extra ? state.ChainSq : state.ArmSq;
+        var cuts = new Dictionary<string, SlashChain>();
+        foreach (Move m in state.TurnMoves(board))
+        {
+            // Pawns on the analyzer's board always promote to a queen.
+            if (m.From != sq || (m.IsPromotion && m.PromotionType != Piece.Queen))
+            {
+                continue;
+            }
+            var b = board.Clone();
+            var s = state.Clone();
+            b.MakeMove(m);
+            s.AfterMove(b, m, us);
+            if (s.ExtraStage == 2)
+            {
+                b.MakeNullMove();
+                s.AfterSkip(b);
+                cuts[Sq.Name(m.To)] = ChainOf(b, s, us);
+            }
+        }
+        return new SlashChain(Sq.Name(sq), (extra ? state.ChainMode : state.ArmKind).ToString(),
+            extra ? state.ChainLeft : state.ArmLeft, extra, cuts);
     }
 
     private static SpellState BuildState(Board board, AnalyzeRequest req, int us)
@@ -323,6 +367,29 @@ public static class Analyzer
             // you cast has ticked an even number of times, one the opponent cast an odd number.
             int plies = owner == us ? 2 * turns : 2 * turns - 1;
             st.Effects.Add(new SpellEffect { Kind = kind, Owner = owner, Square = sq, Plies = plies });
+        }
+        if (req.Chain != null)
+        {
+            int sq = Sq.Parse(req.Chain.Square ?? "");
+            if (sq < 0 || sq > 63 || !Enum.TryParse(req.Chain.Kind, out ChainKind kind) || kind == ChainKind.None)
+            {
+                throw new ArgumentException("That slash could not be read.");
+            }
+            // The slash card was cast this turn.
+            st.UsedThisTurn = true;
+            if (req.Chain.Extra)
+            {
+                st.ExtraStage = 2;
+                st.ChainSq = sq;
+                st.ChainMode = kind;
+                st.ChainLeft = req.Chain.Left;
+            }
+            else
+            {
+                st.ArmSq = sq;
+                st.ArmKind = kind;
+                st.ArmLeft = req.Chain.Left;
+            }
         }
         st.SyncMasks(board);
         return st;
@@ -491,16 +558,9 @@ public static class Analyzer
             foreach (int[] t in state.Actions(board, us, card, ChainTargets, copy))
             {
                 var cast = Cast(board, state, us, card, copy, t);
-                if (cast == null)
+                if (cast != null)
                 {
-                    continue;
-                }
-                foreach (Move m in cast.State.TurnMoves(cast.Board))
-                {
-                    if (m.From == t[0] && m.IsCapture)
-                    {
-                        Walk(cast, cast.State, cast.Board, m, new List<Move>(), 0);
-                    }
+                    AddChains(searcher, cast, us, found, ct);
                 }
             }
             return found;
@@ -515,9 +575,20 @@ public static class Analyzer
             }
         }
         return found;
+    }
 
-        // Mirrors SpellPlanner.PlanChain: follow every capture chain the card allows, up to 4 extra captures.
-        void Walk(Candidate cast, SpellState s0, Board b0, Move m, List<Move> line, int depth)
+    // Mirrors SpellPlanner.PlanChain: follow every capture chain the armed piece allows, up to 4 extra captures.
+    private static void AddChains(Engine searcher, Candidate armed, int us, List<Candidate> found, CancellationToken ct)
+    {
+        foreach (Move m in armed.State.TurnMoves(armed.Board))
+        {
+            if (m.From == armed.State.ArmSq && m.IsCapture)
+            {
+                Walk(armed.State, armed.Board, m, new List<Move>(), 0);
+            }
+        }
+
+        void Walk(SpellState s0, Board b0, Move m, List<Move> line, int depth)
         {
             if (found.Count >= ChainLeaves || ct.IsCancellationRequested)
             {
@@ -535,13 +606,13 @@ public static class Analyzer
                 steps.Add(Move.Null);
                 foreach (Move next in s.TurnMoves(b))
                 {
-                    Walk(cast, s, b, next, steps, depth + 1);
+                    Walk(s, b, next, steps, depth + 1);
                 }
                 return;
             }
             found.Add(new Candidate
             {
-                Action = cast.Action, Start = cast.Board, Board = b, State = s, CastEffects = cast.CastEffects,
+                Action = armed.Action, Start = armed.Board, Board = b, State = s, CastEffects = armed.CastEffects,
                 Steps = steps, OpponentToMove = true, Quick = -searcher.QuickEval(b),
             });
         }

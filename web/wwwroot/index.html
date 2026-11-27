@@ -341,6 +341,7 @@ let at = 0;
 let casting = null;      // a cast waiting on the user: { color, id, copy, targets, next?, stepKind?, step?, steps?, copies? }
 let castNote = null;     // { color, text }: why the last cast didn't go as asked, shown under that hand
 let held = null;        // { payload, ghost, stop }: an effect picked up from the tray, placed by the next board click
+let slash = null;       // a Youmu slash this turn: the server's SlashChain ({ square, kind, left, extra, cuts }) plus color
 
 const $ = id => document.getElementById(id);
 const sqName = (f, r) => 'abcdefgh'[f] + (r + 1);
@@ -533,7 +534,10 @@ function renderStatus() {
   const draw = moveNo % DRAW_EVERY === 0
     ? `<span class="badge">${name(turn)} draws a card this turn (if under ${HAND_CAP})</span>`
     : `<span class="note">next card draw on move ${DRAW_EVERY * (Math.floor(moveNo / DRAW_EVERY) + 1)}</span>`;
-  $('turnInfo').innerHTML = `<b>${name(turn)}</b> to move · move ${moveNo} ${draw}`;
+  const cutting = slash?.color !== turn ? ''
+    : slash.extra ? ` <span class="badge">The piece on ${slash.square} moves again after its cut</span>`
+    : ` <span class="badge">The piece on ${slash.square} is ready to cut</span>`;
+  $('turnInfo').innerHTML = `<b>${name(turn)}</b> to move · move ${moveNo} ${draw}${cutting}`;
   const btn = $('analyze');
   btn.disabled = analyzing;
   btn.textContent = analyzing ? 'Analyzing…' : 'Analyze';
@@ -558,7 +562,7 @@ function addSpirit(color, n) {
 function snapshot() {
   return { board: { ...board }, effects: effects.map(e => ({ ...e })), mana: +$('mana').value, oppMana: +$('oppMana').value,
     castling: ['K', 'Q', 'k', 'q'].filter(c => $('c' + c).checked).join(''), turn, ep, moveNo,
-    hand: [...hand], oppHand: [...oppHand], oppPlayed: [...oppPlayed] };
+    hand: [...hand], oppHand: [...oppHand], oppPlayed: [...oppPlayed], slash };
 }
 
 function restore(snap) {
@@ -569,6 +573,7 @@ function restore(snap) {
   ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = snap.castling.includes(c));
   ({ turn, ep, moveNo } = snap);
   hand = [...snap.hand]; oppHand = [...snap.oppHand]; oppPlayed = [...snap.oppPlayed];
+  slash = snap.slash ?? null;
 }
 
 function pushHistory() {
@@ -636,7 +641,7 @@ function castle(piece, from, to) {
 function drop(payload, sq) {
   if (payload.piece) {
     if (payload.from === sq || (!payload.from && !sq)) return;
-    let piece = payload.piece;
+    let piece = payload.piece, cut;
     const target = sq && board[sq];
     const isMove = payload.from && sq && (!target || colorOf(target) !== colorOf(piece));
     if (isMove) {
@@ -645,15 +650,18 @@ function drop(payload, sq) {
       const pawn = piece.toLowerCase() === 'p';
       const passedSq = pawn && !target && sq === ep && sq[0] !== payload.from[0] ? sq[0] + payload.from[1] : null;
       const takenSq = target ? sq : passedSq;
+      // A cut skips the other side's turn: it never begins, so it brings no spirit power and no effect ticks down.
+      cut = slash?.color === mover && slash.square === payload.from ? slash.cuts[sq] : undefined;
+      slash = cut ? { ...cut, color: mover } : null;
       // The game refunds a lost piece's value to its owner (never for a Clone), then the other side's turn begins with +1.
       if (takenSq && board[takenSq] && !effects.some(e => e.sq === takenSq && e.kind === 'clone')) {
         addSpirit(victim, PIECE_VALUE[board[takenSq].toLowerCase()]);
       }
-      addSpirit(victim, 1);
+      if (!cut) addSpirit(victim, 1);
       if (passedSq) { delete board[passedSq]; effects = effects.filter(e => e.sq !== passedSq); }
-      ep = pawn && Math.abs(sq[1] - payload.from[1]) === 2 ? sq[0] + (+sq[1] + +payload.from[1]) / 2 : '-';
+      ep = !cut && pawn && Math.abs(sq[1] - payload.from[1]) === 2 ? sq[0] + (+sq[1] + +payload.from[1]) / 2 : '-';
       if (pawn && (sq[1] === '8' || sq[1] === '1')) piece = mover === 'w' ? 'Q' : 'q';
-      turn = victim;
+      if (!cut) turn = victim;
       if (mover === 'b') moveNo++;
     }
     if (payload.from) {
@@ -668,7 +676,7 @@ function drop(payload, sq) {
     if (sq) board[sq] = piece;
     if (isMove) {
       castle(piece, payload.from, sq);
-      tickEffects(colorOf(piece));
+      if (!cut) tickEffects(colorOf(piece));
       pushHistory();
       if (turn === side && $('auto').checked) analyze();
     }
@@ -964,6 +972,7 @@ function finishCast(c, d) {
   $('oppMana').value = side === 'w' ? d.blackMana : d.whiteMana;
   takeFromHand(c.color, c.id);
   if (c.color !== side && !oppPlayed.includes(c.id)) oppPlayed.push(c.id);
+  slash = d.chain ? { ...d.chain, color: c.color } : null;
 }
 
 // Only classes change, so the press that dropped the cast still reaches the button it was on.
@@ -1062,6 +1071,8 @@ function playLine(opt, upto) {
   history.push(analyzed.snap);
   at = history.length - 1;
   restore(analyzed.snap);
+  // The line's own plies already play out any cuts.
+  slash = null;
   if (opt.cardId) {
     hand = hand.filter(h => h !== opt.cardId);
     castCard(side, opt.cardId);
@@ -1176,6 +1187,7 @@ async function analyze() {
     renderResult(await analyzeEngine('Analyze', {
       fen: fen(), mana: +$('mana').value, opponentMana: +$('oppMana').value,
       hand, opponentHand: oppHand, opponentPlayed: oppPlayed, effects: effectPayload(), thinkMs: +thinkMs,
+      chain: slash?.color === turn ? { square: slash.square, kind: slash.kind, left: slash.left, extra: slash.extra } : null,
     }));
   } catch (e) {
     renderResult({ error: `The analyzer failed: ${e.message}` });
@@ -1213,11 +1225,12 @@ $('start').onclick = () => {
   $('mana').value = 0; $('oppMana').value = 0;
   ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = true);
   turn = 'w'; ep = '-'; moveNo = 1;
-  hand = []; oppHand = []; oppPlayed = [];
+  hand = []; oppHand = []; oppPlayed = []; slash = null;
   resetHistory(); renderBoard(); renderCards();
 };
 $('loadFen').onclick = () => {
   applyFen($('fen').value);
+  slash = null;
   side = turn;
   sidePicker.set(sideItems, { value: side });
   resetHistory();
