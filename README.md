@@ -4,11 +4,11 @@
 
 A card-aware move analyzer for [Touhou Chess](https://store.steampowered.com/app/5482350/). Simply set up the current game's condition and click "Analyze", the analyzer will tell you the next best move.
 
-![The analyzer recommending a move, with both players' cards and the opponent's best card reply](docs/screenshot.png)
-
 WARNING: This tools is for educational use only, you can use it for analyzing games afterwards, but do NOT use it during online matches, that is cheating!
 
 ## How the analyzer works
+
+![The analyzer recommending a move, with both players' cards and the opponent's best card reply](docs/screenshot.png)
 
 The analyzer doesn't reimplement the game. Touhou Chess keeps its rules and AI in a plain .NET library, `TouhouChess.Core.dll`, which ships with the game. This project calls that library directly. Move generation, every card's effect and targeting rules, and the search engine are therefore the game's own code.
 
