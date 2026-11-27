@@ -29,6 +29,9 @@ public sealed record PlayOption(
 public sealed record AnalyzeResponse(
     string Error, string SideToMove, PlayOption NoCard, List<PlayOption> Cards, string Recommended, string Saving = null);
 
+// Score and ScoreText are from White's side.
+public sealed record EvalResponse(string Error, int Score = 0, string ScoreText = null, bool Mate = false);
+
 // The card is cast by the side to move in Fen. Targets are the squares picked so far.
 public sealed record CastRequest(
     string Fen, int Mana, int OpponentMana, List<string> OpponentPlayed, List<EffectInput> Effects,
@@ -59,6 +62,10 @@ public static class Analyzer
     private const int MinReplyMs = 20;
     // Fraction of the think time left for reply checks when the opponent holds cards.
     private const double ReplyBudgetShare = 0.35;
+
+    // Created on first use so only the worker that serves Eval allocates its tables; kept so the
+    // transposition table carries over between the positions of one game.
+    private static Engine _evalEngine;
 
     private static readonly Dictionary<string, EffectKind> EffectKinds = new()
     {
@@ -135,29 +142,12 @@ public static class Analyzer
 
     public static AnalyzeResponse Run(AnalyzeRequest req, CancellationToken ct)
     {
-        if (!LooksLikeFen(req.Fen))
+        string error = Load(req, out Board board, out SpellState state);
+        if (error != null)
         {
-            return Fail("That FEN could not be read. It needs 8 ranks and one king per side.");
-        }
-        Board board;
-        try
-        {
-            board = new Board(req.Fen);
-        }
-        catch (Exception)
-        {
-            return Fail("That FEN could not be read.");
+            return Fail(error);
         }
         int us = board.SideToMove;
-        SpellState state;
-        try
-        {
-            state = BuildState(board, req, us);
-        }
-        catch (ArgumentException e)
-        {
-            return Fail(e.Message);
-        }
 
         var searcher = new Engine();
         var clock = Stopwatch.StartNew();
@@ -222,6 +212,48 @@ public static class Analyzer
         return new AnalyzeResponse(
             null, us == 0 ? "white" : "black", ToOption(noCard, noCard.Score, state, us),
             options, recommended, saving);
+    }
+
+    // The board alone: cards in hand are ignored, effects on the board and a slash in progress are not.
+    public static EvalResponse Eval(AnalyzeRequest req)
+    {
+        string error = Load(req, out Board board, out SpellState state);
+        if (error != null)
+        {
+            return new EvalResponse(error);
+        }
+        _evalEngine ??= new Engine();
+        var limits = new SearchLimits { MaxDepth = 64, TimeMs = Math.Clamp(req.ThinkMs, 100, 5000) };
+        var (score, _) = SearchPosition(_evalEngine, board, state, limits, CancellationToken.None);
+        int white = board.SideToMove == 0 ? score : -score;
+        return new EvalResponse(null, white, ScoreText(white), Evaluation.IsMateScore(white));
+    }
+
+    private static string Load(AnalyzeRequest req, out Board board, out SpellState state)
+    {
+        board = null;
+        state = null;
+        if (!LooksLikeFen(req.Fen))
+        {
+            return "That FEN could not be read. It needs 8 ranks and one king per side.";
+        }
+        try
+        {
+            board = new Board(req.Fen);
+        }
+        catch (Exception)
+        {
+            return "That FEN could not be read.";
+        }
+        try
+        {
+            state = BuildState(board, req, board.SideToMove);
+        }
+        catch (ArgumentException e)
+        {
+            return e.Message;
+        }
+        return null;
     }
 
     public static CastResponse Cast(CastRequest req)

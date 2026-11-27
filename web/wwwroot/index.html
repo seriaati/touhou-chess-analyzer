@@ -34,6 +34,16 @@
   h2 { font-size: 14px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; }
 
+  .board-wrap { display: flex; gap: 8px; }
+  .board-wrap .board { flex: 1; min-width: 0; }
+  /* The bar's colours stand for the pieces, so they stay the same in both themes. */
+  .eval { position: relative; flex: none; width: 28px; background: #3a3833; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .eval-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: #f4f2ee; transition: height .4s ease; }
+  .eval.flipped .eval-fill { top: 0; bottom: auto; }
+  .eval-text { position: absolute; left: 0; right: 0; font: 600 10px/1 system-ui, sans-serif; text-align: center; font-variant-numeric: tabular-nums; }
+  .eval-text.white { bottom: 4px; color: #1e1d1b; } .eval-text.black { top: 4px; color: #ece9e3; }
+  .eval.flipped .eval-text.white { top: 4px; bottom: auto; } .eval.flipped .eval-text.black { bottom: 4px; top: auto; }
+  .eval.stale .eval-text { opacity: .5; }
   .board { display: grid; grid-template-columns: repeat(8, 1fr); border: 2px solid var(--dark); border-radius: 4px; overflow: hidden; user-select: none; }
   .sq { position: relative; aspect-ratio: 1; min-width: 0; display: flex; align-items: center; justify-content: center; font-size: min(7.5vw, 46px); line-height: 1; touch-action: none; }
   .sq.has-piece { cursor: grab; }
@@ -186,7 +196,10 @@
 <main>
   <div>
     <section>
-      <div class="board" id="board"></div>
+      <div class="board-wrap">
+        <div class="eval" id="eval"><div class="eval-fill" id="evalFill"></div><span class="eval-text" id="evalText"></span></div>
+        <div class="board" id="board"></div>
+      </div>
       <div class="tray" id="pieces"></div>
       <div class="tray" id="effects"></div>
       <div class="row">
@@ -333,6 +346,8 @@ function engineWorker() {
 }
 const analyzeEngine = engineWorker();
 const castEngine = engineWorker();
+const evalEngine = engineWorker();
+const EVAL_MS = 1000;
 let highlighted = [];
 let threatened = [];
 let analyzed = null;     // { at, snap }: the history entry the last analysis ran on; clicked lines replay from here
@@ -524,6 +539,7 @@ function renderBoard() {
     el.appendChild(d);
   }
   $('fen').value = fen();
+  requestEval();
   $('back').disabled = at === 0;
   $('fwd').disabled = at >= history.length - 1;
   renderStatus();
@@ -1187,7 +1203,7 @@ async function analyze() {
     renderResult(await analyzeEngine('Analyze', {
       fen: fen(), mana: +$('mana').value, opponentMana: +$('oppMana').value,
       hand, opponentHand: oppHand, opponentPlayed: oppPlayed, effects: effectPayload(), thinkMs: +thinkMs,
-      chain: slash?.color === turn ? { square: slash.square, kind: slash.kind, left: slash.left, extra: slash.extra } : null,
+      chain: chainPayload(),
     }));
   } catch (e) {
     renderResult({ error: `The analyzer failed: ${e.message}` });
@@ -1197,6 +1213,53 @@ async function analyze() {
   }
 }
 
+function chainPayload() {
+  return slash?.color === turn ? { square: slash.square, kind: slash.kind, left: slash.left, extra: slash.extra } : null;
+}
+
+let evalKey = null;      // the request for the position on the board, as JSON
+let evalRunning = false;
+
+// The worker searches one position at a time; positions passed while it is busy are skipped, so it
+// always moves on to the one on the board now.
+function requestEval() {
+  $('eval').classList.toggle('flipped', flipped);
+  const key = JSON.stringify({ fen: fen(), effects: effectPayload(), chain: chainPayload(), thinkMs: EVAL_MS });
+  if (key === evalKey) return;
+  evalKey = key;
+  if (!evalRunning) runEval();
+}
+
+async function runEval() {
+  evalRunning = true;
+  for (let key; key !== evalKey;) {
+    key = evalKey;
+    $('eval').classList.add('stale');
+    let d;
+    try { d = await evalEngine('Eval', JSON.parse(key)); } catch (e) { d = { error: e.message }; }
+    if (key === evalKey) renderEval(d);
+  }
+  evalRunning = false;
+}
+
+function renderEval(d) {
+  const bar = $('eval');
+  bar.classList.remove('stale');
+  if (d.error) {
+    $('evalFill').style.height = '50%';
+    $('evalText').textContent = '';
+    bar.title = `No evaluation: ${d.error}`;
+    return;
+  }
+  // Lichess's centipawns-to-winning-chances curve, so the bar moves a lot near equality and little when far ahead.
+  const share = d.mate ? (d.score > 0 ? 1 : 0) : 1 / (1 + Math.exp(-0.00368208 * d.score));
+  $('evalFill').style.height = `${share * 100}%`;
+  const text = $('evalText');
+  text.className = 'eval-text ' + (d.score >= 0 ? 'white' : 'black');
+  text.textContent = d.mate ? d.scoreText.replace(/^-/, '').replace(/^Mated?$/, '#') : Math.abs(d.score / 100).toFixed(1);
+  bar.title = `Evaluation ${d.scoreText} for White. Board only: cards in hand aren't counted.`;
+  bar.setAttribute('aria-label', bar.title);
+}
 
 const sideItems = [
   { value: 'w', html: `${pieceHtml('K')} White` },

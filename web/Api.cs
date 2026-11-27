@@ -17,6 +17,12 @@ public static partial class Api
             Json.Default.AnalyzeResponse);
 
     [JSExport]
+    public static string Eval(string request) =>
+        JsonSerializer.Serialize(
+            Analyzer.Eval(JsonSerializer.Deserialize(request, Json.Default.AnalyzeRequest)),
+            Json.Default.EvalResponse);
+
+    [JSExport]
     public static string Cast(string request) =>
         JsonSerializer.Serialize(
             Analyzer.Cast(JsonSerializer.Deserialize(request, Json.Default.CastRequest)),
@@ -26,6 +32,7 @@ public static partial class Api
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
 [JsonSerializable(typeof(AnalyzeRequest))]
 [JsonSerializable(typeof(AnalyzeResponse))]
+[JsonSerializable(typeof(EvalResponse))]
 [JsonSerializable(typeof(CastRequest))]
 [JsonSerializable(typeof(CastResponse))]
 internal partial class Json : JsonSerializerContext;
