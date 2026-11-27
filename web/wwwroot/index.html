@@ -6,19 +6,25 @@
 <title>Touhou Chess Analyzer</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script>
+  // Runs before the page renders so a saved theme doesn't flash the system one first.
+  const THEME_KEY = 'touhou-chess-analyzer-theme';
+  try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
 <style>
   :root {
-    --bg: #f6f5f2; --panel: #ffffff; --text: #1e1d1b; --muted: #6b6862; --border: #dedbd4;
-    --light: #eedfc4; --dark: #b58a63; --accent: #c0392b; --accent-text: #fff; --good: #2e7d4f; --hl: #f4d03f;
-    --threat: #e0584a; --shadow: rgba(0,0,0,.16);
+    color-scheme: light dark;
+    --bg: light-dark(#f6f5f2, #171614); --panel: light-dark(#ffffff, #22211e); --text: light-dark(#1e1d1b, #ece9e3);
+    --muted: light-dark(#6b6862, #a29e96); --border: light-dark(#dedbd4, #3a3833);
+    --light: light-dark(#eedfc4, #cdb894); --dark: light-dark(#b58a63, #8f6a4a); --accent: light-dark(#c0392b, #e0584a);
+    --accent-text: #fff; --good: light-dark(#2e7d4f, #5cc488); --hl: #f4d03f;
+    --threat: #e0584a; --shadow: light-dark(rgba(0,0,0,.16), rgba(0,0,0,.5));
   }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #171614; --panel: #22211e; --text: #ece9e3; --muted: #a29e96; --border: #3a3833;
-      --light: #cdb894; --dark: #8f6a4a; --accent: #e0584a; --good: #5cc488; --hl: #f4d03f; --shadow: rgba(0,0,0,.5); }
-  }
+  :root[data-theme=light] { color-scheme: light; }
+  :root[data-theme=dark] { color-scheme: dark; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
-  header { padding: 14px 20px; border-bottom: 1px solid var(--border); }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--border); }
   header h1 { margin: 0; font-size: 19px; display: flex; align-items: center; gap: 8px; }
   header h1 img { width: 26px; height: 26px; }
   main { display: grid; grid-template-columns: minmax(300px, 520px) minmax(300px, 1fr) minmax(300px, 1fr); gap: 20px; padding: 20px; max-width: 1800px; }
@@ -175,6 +181,7 @@
 <body>
 <header>
   <h1><img src="favicon.svg" alt="">Touhou Chess Analyzer</h1>
+  <button class="small icon" id="theme"></button>
 </header>
 <main>
   <div>
@@ -1219,6 +1226,24 @@ $('loadFen').onclick = () => {
 ['cK', 'cQ', 'ck', 'cq'].forEach(id => $(id).onchange = renderBoard);
 $('analyze').onclick = analyze;
 $('switchTurn').onclick = () => { turn = other(turn); renderBoard(); };
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+const isDark = () => (document.documentElement.dataset.theme ?? (darkQuery.matches ? 'dark' : 'light')) === 'dark';
+const SUN = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const MOON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 9.5A5.5 5.5 0 1 1 6.5 2.5a4.5 4.5 0 0 0 7 7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+function renderThemeButton() {
+  const btn = $('theme');
+  btn.innerHTML = isDark() ? SUN : MOON;
+  btn.title = isDark() ? 'Switch to light theme' : 'Switch to dark theme';
+  btn.setAttribute('aria-label', btn.title);
+}
+$('theme').onclick = () => {
+  document.documentElement.dataset.theme = isDark() ? 'light' : 'dark';
+  try { localStorage.setItem(THEME_KEY, document.documentElement.dataset.theme); } catch {}
+  renderThemeButton();
+};
+darkQuery.onchange = renderThemeButton;
+renderThemeButton();
+
 $('auto').onchange = save;
 ['mana', 'oppMana'].forEach(id => $(id).oninput = save);
 // The buttons sit outside the input, so they fire the input event themselves to keep listeners like save() running.
