@@ -211,6 +211,9 @@
         </button>
         <button class="small" id="flip">Flip board</button>
         <button class="small" id="start">Reset</button>
+        <button class="small" id="export" title="Download this game's moves and analyses as a file you can import later">Export game</button>
+        <button class="small" id="import" title="Open an exported game and replay it from the first move">Import game</button>
+        <input type="file" id="importFile" accept=".json,application/json" hidden>
       </div>
     </section>
     <section>
@@ -314,6 +317,9 @@ const MAX_EFFECT_TURNS = 9;  // the analyzer clamps effect turns to 1-9
 // SpellState.BeginTurn: a side draws when its turn starts on a move number past 15 * (draws so far + 1).
 const DRAW_EVERY = 15;
 const STORAGE_KEY = 'touhou-chess-analyzer';
+// Kept apart from STORAGE_KEY so analyses filling the storage quota can't stop the game itself from saving.
+const ANALYSES_KEY = 'touhou-chess-analyzer-analyses';
+const GAME_FORMAT = 'touhou-chess-analyzer-game';
 
 let board = {};          // "e4" -> "P"
 let effects = [];        // { sq, kind, turns } or { sq, barrier: 'mine' | 'theirs', turns }
@@ -353,6 +359,7 @@ let threatened = [];
 let analyzed = null;     // { at, snap }: the history entry the last analysis ran on; clicked lines replay from here
 let history = [];        // snapshots after each move; history[at] is the one on the board
 let at = 0;
+let analyses = [];       // { request, response } for every analysis this game, so going back to a position shows its result
 let casting = null;      // a cast waiting on the user: { color, id, copy, targets, next?, stepKind?, step?, steps?, copies? }
 let castNote = null;     // { color, text }: why the last cast didn't go as asked, shown under that hand
 let held = null;        // { payload, ghost, stop }: an effect picked up from the tray, placed by the next board click
@@ -611,6 +618,7 @@ function step(delta) {
   $('resultBody').querySelectorAll('.mv.played').forEach(x => x.classList.remove('played'));
   renderBoard();
   renderCards();
+  showSavedAnalysis();
 }
 
 $('board').addEventListener('pointerdown', e => {
@@ -1199,17 +1207,76 @@ async function analyze() {
   renderStatus();
   history[at] = snapshot();
   analyzed = { at, snap: history[at] };
+  const request = analysisRequest();
+  let response;
   try {
-    renderResult(await analyzeEngine('Analyze', {
-      fen: fen(), mana: +$('mana').value, opponentMana: +$('oppMana').value,
-      hand, opponentHand: oppHand, opponentPlayed: oppPlayed, effects: effectPayload(), thinkMs: +thinkMs,
-      chain: chainPayload(),
-    }));
+    response = await analyzeEngine('Analyze', request);
   } catch (e) {
-    renderResult({ error: `The analyzer failed: ${e.message}` });
+    response = { error: `The analyzer failed: ${e.message}` };
+  }
+  analyses.push({ request, response });
+  saveAnalyses();
+  try {
+    renderResult(response);
   } finally {
     analyzing = false;
     renderStatus();
+  }
+}
+
+// The hands are copied because the pickers add cards to the live arrays.
+function analysisRequest() {
+  return {
+    fen: fen(), mana: +$('mana').value, opponentMana: +$('oppMana').value,
+    hand: [...hand], opponentHand: [...oppHand], opponentPlayed: [...oppPlayed], effects: effectPayload(), thinkMs: +thinkMs,
+    chain: chainPayload(),
+  };
+}
+
+// Think time doesn't change which position was analyzed.
+const positionKey = ({ thinkMs, ...position }) => JSON.stringify(position);
+
+function showSavedAnalysis() {
+  const key = positionKey(analysisRequest());
+  const saved = analyses.findLast(a => positionKey(a.request) === key);
+  if (!saved) return;
+  analyzed = { at, snap: history[at] };
+  renderResult(saved.response);
+}
+
+function saveAnalyses() {
+  try { localStorage.setItem(ANALYSES_KEY, JSON.stringify(analyses)); } catch {}
+}
+
+function exportGame() {
+  history[at] = snapshot();
+  const game = { format: GAME_FORMAT, version: 1, exportedAt: new Date().toISOString(), side, history, analyses };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(game)], { type: 'application/json' }));
+  a.download = `touhou-chess-${game.exportedAt.slice(0, 19).replace(/[T:]/g, '-')}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function importGame(file) {
+  try {
+    // The page renders these strings as HTML and a shared file can't be trusted; real game data never uses these characters.
+    const game = JSON.parse(await file.text(), (k, v) => typeof v === 'string' ? v.replace(/[<>"&]/g, '') : v);
+    if (game.format !== GAME_FORMAT || !game.history?.length) throw new Error("it isn't a game exported from this analyzer");
+    cancelCast();
+    castNote = null; highlighted = []; threatened = [];
+    ({ history, side } = game);
+    analyses = game.analyses || [];
+    at = 0;
+    restore(history[at]);
+    sidePicker.set(sideItems, { value: side });
+    saveAnalyses();
+    $('results').hidden = true;
+    renderBoard();
+    renderCards();
+    showSavedAnalysis();
+  } catch (e) {
+    renderResult({ error: `Couldn't import ${file.name}: ${e.message}` });
   }
 }
 
@@ -1289,6 +1356,7 @@ $('start').onclick = () => {
   ['K', 'Q', 'k', 'q'].forEach(c => $('c' + c).checked = true);
   turn = 'w'; ep = '-'; moveNo = 1;
   hand = []; oppHand = []; oppPlayed = []; slash = null;
+  analyses = []; saveAnalyses();
   resetHistory(); renderBoard(); renderCards();
 };
 $('loadFen').onclick = () => {
@@ -1296,8 +1364,17 @@ $('loadFen').onclick = () => {
   slash = null;
   side = turn;
   sidePicker.set(sideItems, { value: side });
+  analyses = []; saveAnalyses();
   resetHistory();
   renderBoard();
+};
+$('export').onclick = exportGame;
+$('import').onclick = () => $('importFile').click();
+$('importFile').onchange = () => {
+  const file = $('importFile').files[0];
+  // Cleared so picking the same file again still fires a change.
+  $('importFile').value = '';
+  if (file) importGame(file);
 };
 ['cK', 'cQ', 'ck', 'cq'].forEach(id => $(id).onchange = renderBoard);
 $('analyze').onclick = analyze;
@@ -1341,6 +1418,7 @@ try {
     restore(history[at]);
     sidePicker.set(sideItems, { value: side });
     thinkPicker.set(thinkItems, { value: thinkMs });
+    analyses = JSON.parse(localStorage.getItem(ANALYSES_KEY)) || [];
   }
 } catch {}
 renderTrays();
@@ -1350,6 +1428,7 @@ fetch('game/cards.json').then(r => r.json()).then(list => {
   // Saved hands may name cards a game update removed.
   [hand, oppHand, oppPlayed] = [hand, oppHand, oppPlayed].map(ids => ids.filter(cardById));
   renderCards();
+  showSavedAnalysis();
 });
 </script>
 </body>
