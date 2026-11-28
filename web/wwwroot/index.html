@@ -1218,7 +1218,7 @@ function renderResult(d) {
       + ` ${cardTitle(best.cardId, best.copy)} would gain +${(best.gain / 100).toFixed(2)}, not enough to delay it.</small>`;
   } else {
     verdict = `Play ${firstMove || '(no legal move)'}`
-      + `<small>Evaluation ${d.noCard.scoreText}. No card in hand is worth its spirit power here${d.cards.length ? '' : ' (none are playable)'}.</small>`;
+      + `<small>Evaluation ${d.noCard.scoreText}.</small>`;
   }
   if (chosen.reply) {
     verdict += `<small class="warn">Their best move ${replyHtml(chosen.reply)}</small>`;
