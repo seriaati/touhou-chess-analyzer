@@ -1386,7 +1386,7 @@ const sideItems = [
 const sidePicker = makeDropdown($('side'), { keepValue: true, onSelect: v => {
   // Before the first move the boxes still hold the start's spirit power, which belongs to a colour, not to "you".
   if (v !== side && history.length === 1) [$('mana').value, $('oppMana').value] = [$('oppMana').value, $('mana').value];
-  side = v; renderBoard();
+  side = v; flipped = v === 'b'; renderBoard();
 } });
 sidePicker.set(sideItems, { value: side });
 
